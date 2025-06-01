@@ -1,0 +1,73 @@
+# Basic ccAgents Configuration
+# This is a minimal configuration to get started with ccAgents
+# Perfect for: Individual developers, small projects, testing ccAgents
+
+version: "1.0"
+
+# GitHub Repository Configuration
+# Replace these values with your repository information
+github:
+  owner: "your-username"         # Your GitHub username or organization
+  repo: "your-repository"        # Your repository name
+  default_branch: "main"         # Your default branch (main, master, develop, etc.)
+  timeout: 30s                   # Timeout for GitHub API requests
+
+# Claude AI Configuration
+claude:
+  model: "claude-3-sonnet-20240229"  # Recommended model for balanced performance
+  max_tokens: 4096                   # Maximum tokens per request
+  temperature: 0.1                   # Low temperature for consistent code generation
+  timeout: 60s                       # Timeout for Claude API requests
+
+# Workflow Configuration
+workflow:
+  # Safety settings - always require human review for beginners
+  enable_auto_merge: false       # Never auto-merge without review
+  require_review: true           # Always require human review
+  
+  # Quality assurance
+  run_tests: true               # Run tests before creating PR
+  test_command: "npm test"      # Replace with your test command (make test, go test, etc.)
+  test_timeout: 5m              # Timeout for test execution
+  
+  # Security
+  security_scan: true           # Enable basic security scanning
+  
+  # Branch settings
+  branch_prefix: "ccagents/"    # Prefix for created branches
+  target_branch: "main"         # Target branch for pull requests
+
+# User Interface Configuration
+ui:
+  theme: "auto"                 # Auto-detect system theme (light/dark)
+  show_progress: true           # Show progress indicators
+  enable_notifications: false   # Disable notifications for less distraction
+
+# Logging Configuration
+logging:
+  level: "info"                 # Log level (debug, info, warn, error)
+  format: "pretty"              # Human-readable log format
+  output: "stdout"              # Output to terminal
+
+# Performance Configuration (optional)
+performance:
+  cache:
+    enabled: true               # Enable caching for better performance
+    ttl: 1h                     # Cache time-to-live
+  
+  # Resource limits
+  limits:
+    max_goroutines: 100         # Limit concurrent operations
+    max_cpu_percent: 50         # Don't use more than 50% CPU
+
+# Example environment variables to set:
+# export CCAGENTS_GITHUB_TOKEN="your_github_token"
+# export CCAGENTS_CLAUDE_API_KEY="your_claude_api_key"
+
+# To use this configuration:
+# 1. Copy this file to .ccagents.yaml in your project root
+# 2. Update the github.owner and github.repo values
+# 3. Update the workflow.test_command if needed
+# 4. Set your GitHub and Claude API keys as environment variables
+# 5. Run: ccagents validate
+# 6. Run: ccagents process "https://github.com/owner/repo/issues/1"

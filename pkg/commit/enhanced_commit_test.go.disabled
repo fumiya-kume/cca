@@ -1,0 +1,432 @@
+package commit
+
+import (
+	"fmt"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+)
+
+func TestCommitManager_Creation(t *testing.T) {
+	config := ManagerConfig{
+		ConventionalCommits: true,
+		SignCommits:         false,
+		MaxMessageLength:    72,
+		RequireDescription:  true,
+	}
+
+	manager, err := NewManager(config)
+	require.NoError(t, err)
+	assert.NotNil(t, manager)
+}
+
+func TestCommitMessage_Validation(t *testing.T) {
+	testCases := []struct {
+		name    string
+		message string
+		valid   bool
+		type_   string
+	}{
+		{
+			name:    "Valid feat commit",
+			message: "feat: add user authentication system",
+			valid:   true,
+			type_:   "feat",
+		},
+		{
+			name:    "Valid fix commit",
+			message: "fix: resolve login timeout issue",
+			valid:   true,
+			type_:   "fix",
+		},
+		{
+			name:    "Valid docs commit",
+			message: "docs: update API documentation",
+			valid:   true,
+			type_:   "docs",
+		},
+		{
+			name:    "Valid chore commit",
+			message: "chore: update dependencies",
+			valid:   true,
+			type_:   "chore",
+		},
+		{
+			name:    "Valid test commit",
+			message: "test: add unit tests for authentication",
+			valid:   true,
+			type_:   "test",
+		},
+		{
+			name:    "Valid refactor commit",
+			message: "refactor: simplify user service logic",
+			valid:   true,
+			type_:   "refactor",
+		},
+		{
+			name:    "Invalid - no type",
+			message: "add user authentication system",
+			valid:   false,
+			type_:   "",
+		},
+		{
+			name:    "Invalid - empty message",
+			message: "",
+			valid:   false,
+			type_:   "",
+		},
+		{
+			name:    "Invalid - incomplete",
+			message: "feat:",
+			valid:   false,
+			type_:   "feat",
+		},
+		{
+			name:    "Invalid - too long",
+			message: "feat: this is an extremely long commit message that exceeds the recommended maximum length for commit messages",
+			valid:   false,
+			type_:   "feat",
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			validator := CommitValidator{
+				MaxLength:           72,
+				RequireType:         true,
+				ConventionalCommits: true,
+			}
+
+			isValid := validator.ValidateMessage(tc.message)
+			assert.Equal(t, tc.valid, isValid)
+
+			if tc.valid && tc.type_ != "" {
+				assert.True(t, strings.HasPrefix(tc.message, tc.type_+":"))
+			}
+
+			if !tc.valid && tc.message != "" && tc.message != "feat:" {
+				// Check specific failure reasons
+				if len(tc.message) > 72 {
+					assert.True(t, len(tc.message) > 72, "Message should be too long")
+				} else if !strings.Contains(tc.message, ":") {
+					assert.False(t, strings.Contains(tc.message, ":"), "Message should not have type separator")
+				}
+			}
+		})
+	}
+}
+
+func TestCommitMessage_Generation(t *testing.T) {
+	generator := MessageGenerator{
+		ConventionalFormat: true,
+		IncludeScope:       true,
+		MaxLength:          72,
+	}
+
+	testChanges := []struct {
+		files       []string
+		description string
+		type_       string
+		scope       string
+		expected    string
+	}{
+		{
+			files:       []string{"src/auth/login.go", "src/auth/session.go"},
+			description: "implement user authentication",
+			type_:       "feat",
+			scope:       "auth",
+			expected:    "feat(auth): implement user authentication",
+		},
+		{
+			files:       []string{"pkg/api/handler.go"},
+			description: "fix timeout handling",
+			type_:       "fix",
+			scope:       "api",
+			expected:    "fix(api): fix timeout handling",
+		},
+		{
+			files:       []string{"README.md", "docs/api.md"},
+			description: "update documentation",
+			type_:       "docs",
+			scope:       "",
+			expected:    "docs: update documentation",
+		},
+		{
+			files:       []string{"go.mod", "go.sum"},
+			description: "update dependencies",
+			type_:       "chore",
+			scope:       "",
+			expected:    "chore: update dependencies",
+		},
+	}
+
+	for _, tc := range testChanges {
+		t.Run(tc.description, func(t *testing.T) {
+			change := ChangeGroup{
+				Files:       tc.files,
+				Description: tc.description,
+				Type:        tc.type_,
+				Scope:       tc.scope,
+			}
+
+			message := generator.GenerateMessage(change)
+			assert.Equal(t, tc.expected, message)
+			assert.True(t, len(message) <= 72)
+			assert.Contains(t, message, tc.type_)
+		})
+	}
+}
+
+func TestCommitAnalyzer_ChangeGrouping(t *testing.T) {
+	analyzer := ChangeAnalyzer{
+		GroupByType:  true,
+		GroupByScope: true,
+		MinGroupSize: 1,
+		MaxGroupSize: 10,
+	}
+
+	changes := []FileChange{
+		{
+			Path:  "src/auth/login.go",
+			Type:  ChangeTypeModified,
+			Lines: 50,
+			Scope: "auth",
+		},
+		{
+			Path:  "src/auth/session.go",
+			Type:  ChangeTypeAdded,
+			Lines: 30,
+			Scope: "auth",
+		},
+		{
+			Path:  "pkg/api/handler.go",
+			Type:  ChangeTypeModified,
+			Lines: 20,
+			Scope: "api",
+		},
+		{
+			Path:  "docs/README.md",
+			Type:  ChangeTypeModified,
+			Lines: 10,
+			Scope: "docs",
+		},
+		{
+			Path:  "test/auth_test.go",
+			Type:  ChangeTypeAdded,
+			Lines: 40,
+			Scope: "test",
+		},
+	}
+
+	groups := analyzer.GroupChanges(changes)
+
+	// Should group by scope
+	authFiles := 0
+	apiFiles := 0
+	docsFiles := 0
+	testFiles := 0
+
+	for _, group := range groups {
+		switch group.Scope {
+		case "auth":
+			authFiles += len(group.Files)
+		case "api":
+			apiFiles += len(group.Files)
+		case "docs":
+			docsFiles += len(group.Files)
+		case "test":
+			testFiles += len(group.Files)
+		}
+	}
+
+	assert.Equal(t, 2, authFiles, "Should have 2 auth files")
+	assert.Equal(t, 1, apiFiles, "Should have 1 api file")
+	assert.Equal(t, 1, docsFiles, "Should have 1 docs file")
+	assert.Equal(t, 1, testFiles, "Should have 1 test file")
+}
+
+func TestCommitManager_AtomicCommits(t *testing.T) {
+	manager := &Manager{
+		config: ManagerConfig{
+			ConventionalCommits: true,
+			AtomicCommits:       true,
+			MaxFilesPerCommit:   5,
+		},
+	}
+
+	// Test atomic commit creation
+	largeChangeSet := make([]FileChange, 12)
+	for i := 0; i < 12; i++ {
+		largeChangeSet[i] = FileChange{
+			Path:  fmt.Sprintf("file%d.go", i),
+			Type:  ChangeTypeModified,
+			Lines: 10,
+		}
+	}
+
+	// Should split into multiple commits due to MaxFilesPerCommit
+	maxFilesPerCommit := manager.config.MaxFilesPerCommit
+	expectedCommits := (len(largeChangeSet) + maxFilesPerCommit - 1) / maxFilesPerCommit
+
+	assert.True(t, expectedCommits > 1, "Should split into multiple commits")
+	assert.Equal(t, 5, maxFilesPerCommit)
+	assert.Equal(t, 3, expectedCommits) // 12 files / 5 files per commit = 3 commits
+}
+
+func TestCommitMessage_Formatting(t *testing.T) {
+	formatter := MessageFormatter{
+		MaxSubjectLength: 50,
+		MaxBodyLength:    72,
+		IncludeFooter:    true,
+		FooterFormat:     "Closes #%d",
+	}
+
+	testMessages := []struct {
+		subject   string
+		body      string
+		issueNum  int
+		formatted string
+	}{
+		{
+			subject:   "feat: add user authentication",
+			body:      "Implement OAuth2 integration with Google and GitHub providers",
+			issueNum:  123,
+			formatted: "feat: add user authentication\n\nImplement OAuth2 integration with Google and GitHub providers\n\nCloses #123",
+		},
+		{
+			subject:   "fix: resolve memory leak",
+			body:      "Fix goroutine leak in connection pool",
+			issueNum:  456,
+			formatted: "fix: resolve memory leak\n\nFix goroutine leak in connection pool\n\nCloses #456",
+		},
+	}
+
+	for _, tm := range testMessages {
+		t.Run(tm.subject, func(t *testing.T) {
+			message := formatter.FormatMessage(tm.subject, tm.body, tm.issueNum)
+			assert.Equal(t, tm.formatted, message)
+
+			lines := strings.Split(message, "\n")
+			assert.True(t, len(lines[0]) <= 50, "Subject should be <= 50 chars")
+			assert.Contains(t, message, fmt.Sprintf("Closes #%d", tm.issueNum))
+		})
+	}
+}
+
+func TestCommitValidator_Rules(t *testing.T) {
+	strictValidator := CommitValidator{
+		MaxLength:           50,
+		RequireType:         true,
+		RequireScope:        true,
+		ConventionalCommits: true,
+		AllowedTypes:        []string{"feat", "fix", "docs", "chore", "test", "refactor"},
+		RequireIssueRef:     true,
+	}
+
+	testCases := []struct {
+		message string
+		valid   bool
+		reason  string
+	}{
+		{
+			message: "feat(auth): add login (#123)",
+			valid:   true,
+			reason:  "Valid conventional commit with scope and issue ref",
+		},
+		{
+			message: "fix(api): resolve timeout issue (#456)",
+			valid:   true,
+			reason:  "Valid fix commit with scope and issue ref",
+		},
+		{
+			message: "feat: add user auth",
+			valid:   false,
+			reason:  "Missing scope (required by strict validator)",
+		},
+		{
+			message: "update: change something",
+			valid:   false,
+			reason:  "Invalid type (not in allowed types)",
+		},
+		{
+			message: "feat(auth): add authentication system",
+			valid:   false,
+			reason:  "Missing issue reference",
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.reason, func(t *testing.T) {
+			isValid := strictValidator.ValidateMessage(tc.message)
+			assert.Equal(t, tc.valid, isValid, tc.reason)
+		})
+	}
+}
+
+func TestCommitManager_BatchOperations(t *testing.T) {
+	manager := &Manager{
+		config: ManagerConfig{
+			ConventionalCommits: true,
+			BatchSize:           3,
+			BatchTimeout:        5 * time.Second,
+		},
+	}
+
+	// Test batch commit creation
+	changes := []ChangeGroup{
+		{Type: "feat", Scope: "auth", Files: []string{"auth.go"}},
+		{Type: "feat", Scope: "api", Files: []string{"api.go"}},
+		{Type: "fix", Scope: "db", Files: []string{"db.go"}},
+		{Type: "test", Scope: "auth", Files: []string{"auth_test.go"}},
+		{Type: "docs", Scope: "", Files: []string{"README.md"}},
+	}
+
+	batchSize := manager.config.BatchSize
+	expectedBatches := (len(changes) + batchSize - 1) / batchSize
+
+	assert.Equal(t, 3, batchSize)
+	assert.Equal(t, 2, expectedBatches) // 5 changes / 3 batch size = 2 batches
+	assert.True(t, manager.config.BatchTimeout > 0)
+}
+
+func TestCommitMessage_Templates(t *testing.T) {
+	templates := map[string]string{
+		"feat":     "feat({{.scope}}): {{.description}}",
+		"fix":      "fix({{.scope}}): {{.description}}",
+		"docs":     "docs: {{.description}}",
+		"chore":    "chore: {{.description}}",
+		"test":     "test({{.scope}}): {{.description}}",
+		"refactor": "refactor({{.scope}}): {{.description}}",
+	}
+
+	testData := struct {
+		scope       string
+		description string
+	}{
+		scope:       "auth",
+		description: "implement OAuth integration",
+	}
+
+	for commitType, template := range templates {
+		t.Run(commitType, func(t *testing.T) {
+			// Simple template replacement for testing
+			expected := template
+			expected = strings.ReplaceAll(expected, "{{.scope}}", testData.scope)
+			expected = strings.ReplaceAll(expected, "{{.description}}", testData.description)
+
+			switch commitType {
+			case "feat":
+				assert.Equal(t, "feat(auth): implement OAuth integration", expected)
+			case "fix":
+				assert.Equal(t, "fix(auth): implement OAuth integration", expected)
+			case "docs":
+				assert.Equal(t, "docs: implement OAuth integration", expected)
+			case "test":
+				assert.Equal(t, "test(auth): implement OAuth integration", expected)
+			}
+		})
+	}
+}

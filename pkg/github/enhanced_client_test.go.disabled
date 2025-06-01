@@ -1,0 +1,288 @@
+package github
+
+import (
+	"context"
+	"errors"
+	"testing"
+	"time"
+
+	"github.com/fumiya-kume/cca/internal/types"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+)
+
+func TestClient_RateLimitHandling(t *testing.T) {
+	mock := NewMockClient()
+
+	// Test rate limit info retrieval
+	ctx := context.Background()
+	rateLimit, err := mock.GetRateLimit(ctx)
+	require.NoError(t, err)
+	assert.NotNil(t, rateLimit)
+	assert.NotNil(t, rateLimit.Core)
+	assert.NotNil(t, rateLimit.Search)
+	assert.Equal(t, 5000, rateLimit.Core.Limit)
+	assert.Equal(t, 4999, rateLimit.Core.Remaining)
+}
+
+func TestClient_PROperations(t *testing.T) {
+	mock := NewMockClient()
+
+	ctx := context.Background()
+
+	// Test successful PR creation
+	prData := &types.PRData{
+		Title:      "Fix authentication bug",
+		Body:       "This PR fixes the authentication issue mentioned in #123",
+		Branch:     "fix/auth-bug",
+		BaseBranch: "main",
+	}
+
+	createdPR, err := mock.CreatePR(ctx, "owner", "repo", prData)
+	require.NoError(t, err)
+	assert.NotNil(t, createdPR)
+	assert.Equal(t, prData.Title, createdPR.Title)
+	assert.Equal(t, prData.Body, createdPR.Body)
+	assert.Equal(t, prData.Branch, createdPR.Branch)
+	assert.Equal(t, prData.BaseBranch, createdPR.BaseBranch)
+	assert.Equal(t, "open", createdPR.State)
+	assert.True(t, createdPR.Number > 0)
+}
+
+func TestClient_PRCreationError(t *testing.T) {
+	mock := NewMockClient()
+	mock.prError = errors.New("PR creation failed")
+
+	ctx := context.Background()
+	prData := &types.PRData{
+		Title:      "Test PR",
+		Body:       "Test body",
+		Branch:     "test-branch",
+		BaseBranch: "main",
+	}
+
+	createdPR, err := mock.CreatePR(ctx, "owner", "repo", prData)
+	assert.Error(t, err)
+	assert.Nil(t, createdPR)
+	assert.Contains(t, err.Error(), "PR creation failed")
+}
+
+func TestClient_IssueOperations(t *testing.T) {
+	mock := NewMockClient()
+
+	// Test with custom issue data
+	expectedIssue := &types.IssueData{
+		Number:    456,
+		Title:     "Custom test issue",
+		Body:      "This is a custom test issue with specific data",
+		State:     "open",
+		Labels:    []string{"bug", "high-priority"},
+		Assignees: []string{"developer1", "reviewer1"},
+		CreatedAt: time.Now().Add(-48 * time.Hour),
+		UpdatedAt: time.Now().Add(-2 * time.Hour),
+	}
+	mock.issueData = expectedIssue
+
+	ctx := context.Background()
+	issue, err := mock.GetIssue(ctx, "owner", "repo", 456)
+	require.NoError(t, err)
+	assert.Equal(t, expectedIssue.Number, issue.Number)
+	assert.Equal(t, expectedIssue.Title, issue.Title)
+	assert.Equal(t, expectedIssue.Body, issue.Body)
+	assert.Equal(t, expectedIssue.Labels, issue.Labels)
+	assert.Equal(t, expectedIssue.Assignees, issue.Assignees)
+}
+
+func TestClient_CLIIntegration(t *testing.T) {
+	mock := NewMockClient()
+
+	// Test CLI-based issue retrieval
+	issue, err := mock.GetIssueUsingCLI("owner", "repo", 123)
+	require.NoError(t, err)
+	assert.NotNil(t, issue)
+	assert.Equal(t, 123, issue.Number)
+	assert.Equal(t, "Test Issue", issue.Title)
+}
+
+func TestClient_CLIIntegrationError(t *testing.T) {
+	mock := NewMockClient()
+	mock.issueError = errors.New("CLI command failed")
+
+	issue, err := mock.GetIssueUsingCLI("owner", "repo", 123)
+	assert.Error(t, err)
+	assert.Nil(t, issue)
+	assert.Contains(t, err.Error(), "CLI command failed")
+}
+
+func TestClient_RepositoryOperations(t *testing.T) {
+	mock := NewMockClient()
+
+	ctx := context.Background()
+
+	// Test default branch retrieval
+	branch, err := mock.GetDefaultBranch(ctx, "owner", "repo")
+	require.NoError(t, err)
+	assert.Equal(t, "main", branch)
+
+	// Test with different default branch
+	mock.defaultBranch = "master"
+	branch, err = mock.GetDefaultBranch(ctx, "owner", "repo")
+	require.NoError(t, err)
+	assert.Equal(t, "master", branch)
+
+	// Test with develop branch
+	mock.defaultBranch = "develop"
+	branch, err = mock.GetDefaultBranch(ctx, "owner", "repo")
+	require.NoError(t, err)
+	assert.Equal(t, "develop", branch)
+}
+
+func TestClient_RepositoryError(t *testing.T) {
+	mock := NewMockClient()
+	mock.branchError = errors.New("repository not found")
+
+	ctx := context.Background()
+	branch, err := mock.GetDefaultBranch(ctx, "owner", "repo")
+	assert.Error(t, err)
+	assert.Empty(t, branch)
+	assert.Contains(t, err.Error(), "repository not found")
+}
+
+func TestClient_AccessValidation(t *testing.T) {
+	mock := NewMockClient()
+
+	ctx := context.Background()
+
+	// Test successful access validation
+	err := mock.ValidateAccess(ctx, "owner", "repo")
+	assert.NoError(t, err)
+
+	// Test various access error scenarios
+	testCases := []struct {
+		name        string
+		errorMsg    string
+		expectedErr string
+	}{
+		{
+			name:        "Repository not found",
+			errorMsg:    "repository not found",
+			expectedErr: "repository not found",
+		},
+		{
+			name:        "Access denied",
+			errorMsg:    "access denied",
+			expectedErr: "access denied",
+		},
+		{
+			name:        "Private repository",
+			errorMsg:    "private repository",
+			expectedErr: "private repository",
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			mock.validateError = errors.New(tc.errorMsg)
+			err := mock.ValidateAccess(ctx, "owner", "repo")
+			assert.Error(t, err)
+			assert.Contains(t, err.Error(), tc.expectedErr)
+		})
+	}
+}
+
+func TestClient_AuthenticationStates(t *testing.T) {
+	mock := NewMockClient()
+	ctx := context.Background()
+
+	// Test authenticated state
+	mock.authenticated = true
+	err := mock.IsAuthenticated(ctx)
+	assert.NoError(t, err)
+
+	// Test unauthenticated state
+	mock.authenticated = false
+	err = mock.IsAuthenticated(ctx)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "not authenticated")
+}
+
+func TestClient_IssueExistence(t *testing.T) {
+	mock := NewMockClient()
+	ctx := context.Background()
+
+	// Test existing issue
+	err := mock.CheckIssueExists(ctx, "owner", "repo", 123)
+	assert.NoError(t, err)
+
+	// Test non-existent issue
+	mock.issueError = errors.New("issue #456 not found")
+	err = mock.CheckIssueExists(ctx, "owner", "repo", 456)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "not found")
+}
+
+func TestClient_ComplexIssueData(t *testing.T) {
+	mock := NewMockClient()
+
+	// Test issue with complex data
+	complexIssue := &types.IssueData{
+		Number:    789,
+		Title:     "Complex issue with multiple components",
+		Body:      "This issue involves:\n- Authentication system\n- Database migrations\n- API endpoints\n- Frontend components",
+		State:     "open",
+		Labels:    []string{"bug", "enhancement", "database", "api", "frontend"},
+		Assignees: []string{"lead-dev", "database-admin", "frontend-dev"},
+		CreatedAt: time.Now().Add(-72 * time.Hour),
+		UpdatedAt: time.Now().Add(-30 * time.Minute),
+	}
+	mock.issueData = complexIssue
+
+	ctx := context.Background()
+	issue, err := mock.GetIssue(ctx, "owner", "repo", 789)
+	require.NoError(t, err)
+
+	assert.Equal(t, complexIssue.Number, issue.Number)
+	assert.Equal(t, complexIssue.Title, issue.Title)
+	assert.Contains(t, issue.Body, "Authentication system")
+	assert.Contains(t, issue.Body, "Database migrations")
+	assert.Len(t, issue.Labels, 5)
+	assert.Contains(t, issue.Labels, "database")
+	assert.Contains(t, issue.Labels, "api")
+	assert.Len(t, issue.Assignees, 3)
+	assert.Contains(t, issue.Assignees, "database-admin")
+}
+
+func TestClient_PRWithMetadata(t *testing.T) {
+	mock := NewMockClient()
+
+	// Test PR creation with rich metadata
+	complexPR := &types.PRData{
+		Number:     999,
+		Title:      "Implement comprehensive authentication system",
+		Body:       "## Summary\nThis PR implements:\n- OAuth integration\n- JWT tokens\n- Session management\n\n## Testing\n- Unit tests added\n- Integration tests updated",
+		State:      "open",
+		Branch:     "feature/auth-system",
+		BaseBranch: "develop",
+		CreatedAt:  time.Now().Add(-2 * time.Hour),
+		UpdatedAt:  time.Now().Add(-30 * time.Minute),
+	}
+	mock.prData = complexPR
+
+	ctx := context.Background()
+	inputPR := &types.PRData{
+		Title:      complexPR.Title,
+		Body:       complexPR.Body,
+		Branch:     complexPR.Branch,
+		BaseBranch: complexPR.BaseBranch,
+	}
+
+	createdPR, err := mock.CreatePR(ctx, "owner", "repo", inputPR)
+	require.NoError(t, err)
+
+	assert.Equal(t, complexPR.Number, createdPR.Number)
+	assert.Equal(t, complexPR.Title, createdPR.Title)
+	assert.Contains(t, createdPR.Body, "OAuth integration")
+	assert.Contains(t, createdPR.Body, "Unit tests added")
+	assert.Equal(t, "feature/auth-system", createdPR.Branch)
+	assert.Equal(t, "develop", createdPR.BaseBranch)
+}

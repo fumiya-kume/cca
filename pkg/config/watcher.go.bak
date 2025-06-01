@@ -1,0 +1,513 @@
+package config
+
+import (
+	"context"
+	"fmt"
+	"os"
+	"path/filepath"
+	"sync"
+	"time"
+
+	"github.com/fsnotify/fsnotify"
+	"github.com/fumiya-kume/cca/pkg/errors"
+	"github.com/fumiya-kume/cca/pkg/logger"
+)
+
+// ConfigWatcher watches for configuration file changes and reloads automatically
+type ConfigWatcher struct {
+	configPath   string
+	loader       *Loader
+	watcher      *fsnotify.Watcher
+	config       *Config
+	callbacks    []ConfigChangeCallback
+	mutex        sync.RWMutex
+	ctx          context.Context
+	cancel       context.CancelFunc
+	logger       logger.Logger
+	debounceTime time.Duration
+	lastChange   time.Time
+}
+
+// ConfigChangeCallback is called when configuration changes
+type ConfigChangeCallback func(oldConfig, newConfig *Config) error
+
+// ConfigWatcherOptions contains options for the config watcher
+type ConfigWatcherOptions struct {
+	DebounceTime time.Duration
+	Logger       logger.Logger
+}
+
+// NewConfigWatcher creates a new configuration watcher
+func NewConfigWatcher(configPath string, options *ConfigWatcherOptions) (*ConfigWatcher, error) {
+	if options == nil {
+		options = &ConfigWatcherOptions{
+			DebounceTime: 500 * time.Millisecond,
+		}
+	}
+
+	if options.DebounceTime == 0 {
+		options.DebounceTime = 500 * time.Millisecond
+	}
+
+	watcher, err := fsnotify.NewWatcher()
+	if err != nil {
+		return nil, errors.NewError(errors.ErrorTypeSystem).
+			WithMessage("failed to create file watcher").
+			WithCause(err).
+			Build()
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+
+	return &ConfigWatcher{
+		configPath:   configPath,
+		loader:       NewLoader(configPath),
+		watcher:      watcher,
+		callbacks:    make([]ConfigChangeCallback, 0),
+		ctx:          ctx,
+		cancel:       cancel,
+		logger:       options.Logger,
+		debounceTime: options.DebounceTime,
+	}, nil
+}
+
+// Start starts watching for configuration changes
+func (cw *ConfigWatcher) Start() error {
+	// Load initial configuration
+	config, err := cw.loader.LoadConfig()
+	if err != nil {
+		return errors.NewError(errors.ErrorTypeConfiguration).
+			WithMessage("failed to load initial configuration").
+			WithCause(err).
+			Build()
+	}
+
+	cw.mutex.Lock()
+	cw.config = config
+	cw.mutex.Unlock()
+
+	// Add the config file to watcher
+	if cw.configPath != "" {
+		// Watch the directory containing the config file
+		configDir := filepath.Dir(cw.configPath)
+		if err := cw.watcher.Add(configDir); err != nil {
+			return errors.NewError(errors.ErrorTypeSystem).
+				WithMessage("failed to watch configuration directory").
+				WithCause(err).
+				WithContext("configDir", configDir).
+				Build()
+		}
+
+		if cw.logger != nil {
+			cw.logger.Info("Started watching configuration file", 
+				"configPath", cw.configPath,
+				"configDir", configDir,
+			)
+		}
+	}
+
+	// Start the event processing goroutine
+	go cw.processEvents()
+
+	return nil
+}
+
+// Stop stops watching for configuration changes
+func (cw *ConfigWatcher) Stop() error {
+	cw.cancel()
+	
+	if err := cw.watcher.Close(); err != nil {
+		return errors.NewError(errors.ErrorTypeSystem).
+			WithMessage("failed to close file watcher").
+			WithCause(err).
+			Build()
+	}
+
+	if cw.logger != nil {
+		cw.logger.Info("Stopped configuration watcher")
+	}
+
+	return nil
+}
+
+// GetConfig returns the current configuration
+func (cw *ConfigWatcher) GetConfig() *Config {
+	cw.mutex.RLock()
+	defer cw.mutex.RUnlock()
+	
+	// Return a copy to prevent concurrent modifications
+	configCopy := *cw.config
+	return &configCopy
+}
+
+// AddChangeCallback adds a callback for configuration changes
+func (cw *ConfigWatcher) AddChangeCallback(callback ConfigChangeCallback) {
+	cw.mutex.Lock()
+	defer cw.mutex.Unlock()
+	
+	cw.callbacks = append(cw.callbacks, callback)
+}
+
+// ReloadConfig manually reloads the configuration
+func (cw *ConfigWatcher) ReloadConfig() error {
+	return cw.reloadConfig()
+}
+
+// processEvents processes file system events
+func (cw *ConfigWatcher) processEvents() {
+	for {
+		select {
+		case <-cw.ctx.Done():
+			return
+			
+		case event, ok := <-cw.watcher.Events:
+			if !ok {
+				return
+			}
+			
+			cw.handleFileEvent(event)
+			
+		case err, ok := <-cw.watcher.Errors:
+			if !ok {
+				return
+			}
+			
+			if cw.logger != nil {
+				cw.logger.Error("Configuration watcher error", "error", err)
+			}
+		}
+	}
+}
+
+// handleFileEvent handles a file system event
+func (cw *ConfigWatcher) handleFileEvent(event fsnotify.Event) {
+	// Only process events for our config file
+	if cw.configPath != "" && event.Name != cw.configPath {
+		return
+	}
+
+	// Only process write and create events
+	if !event.Has(fsnotify.Write) && !event.Has(fsnotify.Create) {
+		return
+	}
+
+	// Debounce rapid file changes
+	now := time.Now()
+	if now.Sub(cw.lastChange) < cw.debounceTime {
+		return
+	}
+	cw.lastChange = now
+
+	if cw.logger != nil {
+		cw.logger.Debug("Configuration file changed", 
+			"event", event.String(),
+			"configPath", cw.configPath,
+		)
+	}
+
+	// Wait a bit for the file write to complete
+	time.Sleep(100 * time.Millisecond)
+
+	// Reload configuration
+	if err := cw.reloadConfig(); err != nil {
+		if cw.logger != nil {
+			cw.logger.Error("Failed to reload configuration", "error", err)
+		}
+	}
+}
+
+// reloadConfig reloads the configuration from file
+func (cw *ConfigWatcher) reloadConfig() error {
+	// Load new configuration
+	newConfig, err := cw.loader.LoadConfig()
+	if err != nil {
+		return errors.NewError(errors.ErrorTypeConfiguration).
+			WithMessage("failed to reload configuration").
+			WithCause(err).
+			Build()
+	}
+
+	cw.mutex.Lock()
+	oldConfig := cw.config
+	cw.config = newConfig
+	callbacks := make([]ConfigChangeCallback, len(cw.callbacks))
+	copy(callbacks, cw.callbacks)
+	cw.mutex.Unlock()
+
+	if cw.logger != nil {
+		cw.logger.Info("Configuration reloaded successfully")
+	}
+
+	// Call change callbacks
+	for _, callback := range callbacks {
+		if err := callback(oldConfig, newConfig); err != nil {
+			if cw.logger != nil {
+				cw.logger.Error("Configuration change callback failed", "error", err)
+			}
+		}
+	}
+
+	return nil
+}
+
+// ConfigManager manages configuration with watching and hot reloading
+type ConfigManager struct {
+	watcher   *ConfigWatcher
+	validator *ConfigValidator
+	logger    logger.Logger
+}
+
+// NewConfigManager creates a new configuration manager
+func NewConfigManager(configPath string, logger logger.Logger) (*ConfigManager, error) {
+	options := &ConfigWatcherOptions{
+		DebounceTime: 500 * time.Millisecond,
+		Logger:       logger,
+	}
+
+	watcher, err := NewConfigWatcher(configPath, options)
+	if err != nil {
+		return nil, err
+	}
+
+	return &ConfigManager{
+		watcher:   watcher,
+		validator: NewConfigValidator(ValidationLevelStrict),
+		logger:    logger,
+	}, nil
+}
+
+// Start starts the configuration manager
+func (cm *ConfigManager) Start() error {
+	// Add validation callback
+	cm.watcher.AddChangeCallback(cm.validateConfigChange)
+
+	return cm.watcher.Start()
+}
+
+// Stop stops the configuration manager
+func (cm *ConfigManager) Stop() error {
+	return cm.watcher.Stop()
+}
+
+// GetConfig returns the current configuration
+func (cm *ConfigManager) GetConfig() *Config {
+	return cm.watcher.GetConfig()
+}
+
+// AddChangeCallback adds a callback for configuration changes
+func (cm *ConfigManager) AddChangeCallback(callback ConfigChangeCallback) {
+	cm.watcher.AddChangeCallback(callback)
+}
+
+// ReloadConfig manually reloads the configuration
+func (cm *ConfigManager) ReloadConfig() error {
+	return cm.watcher.ReloadConfig()
+}
+
+// ValidateConfig validates the current configuration
+func (cm *ConfigManager) ValidateConfig() *ValidationResult {
+	config := cm.GetConfig()
+	return cm.validator.ValidateConfig(config)
+}
+
+// validateConfigChange validates configuration changes
+func (cm *ConfigManager) validateConfigChange(oldConfig, newConfig *Config) error {
+	result := cm.validator.ValidateConfig(newConfig)
+	
+	if result.HasErrors() {
+		if cm.logger != nil {
+			cm.logger.Error("Configuration validation failed", 
+				"errors", len(result.Errors),
+				"warnings", len(result.Warnings),
+			)
+			
+			for _, err := range result.Errors {
+				cm.logger.Error("Validation error", 
+					"field", err.Field,
+					"message", err.Message,
+					"value", err.Value,
+				)
+			}
+		}
+		
+		return errors.NewError(errors.ErrorTypeValidation).
+			WithMessage("configuration validation failed").
+			WithContext("errorCount", len(result.Errors)).
+			Build()
+	}
+
+	if result.HasWarnings() && cm.logger != nil {
+		cm.logger.Warn("Configuration validation warnings", 
+			"warnings", len(result.Warnings),
+		)
+		
+		for _, warning := range result.Warnings {
+			cm.logger.Warn("Validation warning", 
+				"field", warning.Field,
+				"message", warning.Message,
+				"value", warning.Value,
+			)
+		}
+	}
+
+	return nil
+}
+
+// BackupManager manages configuration backups
+type BackupManager struct {
+	backupDir string
+	maxBackups int
+	logger    logger.Logger
+}
+
+// NewBackupManager creates a new backup manager
+func NewBackupManager(backupDir string, maxBackups int, logger logger.Logger) *BackupManager {
+	if backupDir == "" {
+		homeDir, _ := os.UserHomeDir()
+		backupDir = filepath.Join(homeDir, ".config", "ccagents", "backups")
+	}
+	
+	if maxBackups <= 0 {
+		maxBackups = 10
+	}
+
+	return &BackupManager{
+		backupDir:  backupDir,
+		maxBackups: maxBackups,
+		logger:     logger,
+	}
+}
+
+// BackupConfig creates a backup of the configuration
+func (bm *BackupManager) BackupConfig(config *Config) (string, error) {
+	if err := os.MkdirAll(bm.backupDir, 0755); err != nil {
+		return "", errors.NewError(errors.ErrorTypeFileSystem).
+			WithMessage("failed to create backup directory").
+			WithCause(err).
+			WithContext("backupDir", bm.backupDir).
+			Build()
+	}
+
+	// Generate backup filename with timestamp
+	timestamp := time.Now().Format("20060102-150405")
+	backupName := fmt.Sprintf("config-backup-%s.yaml", timestamp)
+	backupPath := filepath.Join(bm.backupDir, backupName)
+
+	// Save configuration
+	loader := NewLoader(backupPath)
+	if err := loader.SaveConfig(config); err != nil {
+		return "", errors.NewError(errors.ErrorTypeFileSystem).
+			WithMessage("failed to save configuration backup").
+			WithCause(err).
+			WithContext("backupPath", backupPath).
+			Build()
+	}
+
+	if bm.logger != nil {
+		bm.logger.Info("Configuration backup created", "backupPath", backupPath)
+	}
+
+	// Clean up old backups
+	if err := bm.cleanupOldBackups(); err != nil {
+		if bm.logger != nil {
+			bm.logger.Warn("Failed to clean up old backups", "error", err)
+		}
+	}
+
+	return backupPath, nil
+}
+
+// RestoreConfig restores configuration from a backup
+func (bm *BackupManager) RestoreConfig(backupPath string) (*Config, error) {
+	if _, err := os.Stat(backupPath); os.IsNotExist(err) {
+		return nil, errors.ValidationError(fmt.Sprintf("backup file does not exist: %s", backupPath))
+	}
+
+	loader := NewLoader(backupPath)
+	config, err := loader.LoadConfig()
+	if err != nil {
+		return nil, errors.NewError(errors.ErrorTypeConfiguration).
+			WithMessage("failed to restore configuration from backup").
+			WithCause(err).
+			WithContext("backupPath", backupPath).
+			Build()
+	}
+
+	if bm.logger != nil {
+		bm.logger.Info("Configuration restored from backup", "backupPath", backupPath)
+	}
+
+	return config, nil
+}
+
+// ListBackups returns a list of available backups
+func (bm *BackupManager) ListBackups() ([]string, error) {
+	if _, err := os.Stat(bm.backupDir); os.IsNotExist(err) {
+		return []string{}, nil
+	}
+
+	entries, err := os.ReadDir(bm.backupDir)
+	if err != nil {
+		return nil, errors.NewError(errors.ErrorTypeFileSystem).
+			WithMessage("failed to list backup directory").
+			WithCause(err).
+			WithContext("backupDir", bm.backupDir).
+			Build()
+	}
+
+	var backups []string
+	for _, entry := range entries {
+		if !entry.IsDir() && filepath.Ext(entry.Name()) == ".yaml" {
+			backups = append(backups, filepath.Join(bm.backupDir, entry.Name()))
+		}
+	}
+
+	return backups, nil
+}
+
+// cleanupOldBackups removes old backup files beyond the maximum limit
+func (bm *BackupManager) cleanupOldBackups() error {
+	backups, err := bm.ListBackups()
+	if err != nil {
+		return err
+	}
+
+	if len(backups) <= bm.maxBackups {
+		return nil
+	}
+
+	// Sort backups by modification time (oldest first)
+	type backupInfo struct {
+		path    string
+		modTime time.Time
+	}
+
+	var backupInfos []backupInfo
+	for _, backup := range backups {
+		info, err := os.Stat(backup)
+		if err != nil {
+			continue
+		}
+		backupInfos = append(backupInfos, backupInfo{
+			path:    backup,
+			modTime: info.ModTime(),
+		})
+	}
+
+	// Remove oldest backups
+	toRemove := len(backupInfos) - bm.maxBackups
+	for i := 0; i < toRemove; i++ {
+		if err := os.Remove(backupInfos[i].path); err != nil {
+			if bm.logger != nil {
+				bm.logger.Warn("Failed to remove old backup", 
+					"backup", backupInfos[i].path,
+					"error", err,
+				)
+			}
+		} else if bm.logger != nil {
+			bm.logger.Debug("Removed old backup", "backup", backupInfos[i].path)
+		}
+	}
+
+	return nil
+}

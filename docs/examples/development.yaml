@@ -1,0 +1,100 @@
+# Development Environment Configuration
+# This configuration is optimized for development workflows
+# Perfect for: Daily development, testing features, iterative development
+
+version: "1.0"
+
+# GitHub Repository Configuration
+github:
+  owner: "mycompany"
+  repo: "myproject"
+  default_branch: "develop"         # Use develop branch for development
+  timeout: 45s                      # Slightly longer timeout for complex operations
+
+# Claude AI Configuration (Development-optimized)
+claude:
+  model: "claude-3-haiku-20240307"  # Faster model for quicker iteration
+  max_tokens: 2048                  # Smaller token limit for faster responses
+  temperature: 0.2                  # Slightly more creative for exploration
+  timeout: 45s                      # Reasonable timeout for development
+
+# Workflow Configuration
+workflow:
+  # Safety settings - require review in development
+  enable_auto_merge: false          # Never auto-merge during development
+  require_review: true              # Always require human review
+  
+  # Quality assurance
+  run_tests: true                   # Always run tests
+  test_command: "npm test -- --coverage --watchAll=false"  # Include coverage
+  test_timeout: 8m                  # Generous timeout for comprehensive tests
+  
+  # Security (basic level for development)
+  security_scan: true               # Enable basic security scanning
+  security_tools: ["semgrep"]       # Lightweight security tool
+  
+  # Development-specific settings
+  branch_prefix: "feature/"         # Use feature/ prefix for development
+  target_branch: "develop"          # Target develop branch
+  
+  # Enable formatting and linting
+  run_linter: true
+  lint_command: "npm run lint"
+  run_formatter: true
+  format_command: "npm run format"
+  
+  # Pre/post hooks for development
+  pre_hooks:
+    - "npm ci"                      # Ensure clean dependencies
+    - "npm run type-check"          # Check TypeScript types
+  post_hooks:
+    - "npm run docs:generate"       # Update documentation
+
+# User Interface Configuration
+ui:
+  theme: "dark"                     # Dark theme for development
+  show_progress: true               # Show detailed progress
+  enable_notifications: true       # Enable notifications for feedback
+  show_spinner: true                # Show loading indicators
+
+# Logging Configuration (Development)
+logging:
+  level: "debug"                    # Verbose logging for development
+  format: "pretty"                  # Human-readable format
+  output: "stdout"                  # Output to terminal
+  timestamp_format: "15:04:05"      # Show time for debugging
+
+# Performance Configuration (Development)
+performance:
+  cache:
+    enabled: true                   # Enable caching for faster iterations
+    ttl: 30m                        # Shorter TTL for development
+  
+  # Resource limits (relaxed for development)
+  limits:
+    max_goroutines: 50              # Moderate concurrency
+    max_cpu_percent: 70             # Allow higher CPU usage
+
+# Observability (Basic for development)
+observability:
+  metrics:
+    enabled: true                   # Enable basic metrics
+    port: 9090                      # Standard Prometheus port
+  
+  health:
+    enabled: true                   # Enable health checks
+    port: 8080                      # Standard health check port
+
+# Development-specific environment variables:
+# export CCAGENTS_LOG_LEVEL="debug"
+# export CCAGENTS_GITHUB_TOKEN="your_github_token"
+# export CCAGENTS_CLAUDE_API_KEY="your_claude_api_key"
+# export NODE_ENV="development"
+
+# To use this configuration:
+# 1. Copy this file to .ccagents.yaml in your project root
+# 2. Update the github.owner and github.repo values
+# 3. Adjust test_command and lint_command for your project
+# 4. Set your GitHub and Claude API keys as environment variables
+# 5. Run: ccagents validate
+# 6. Start development: ccagents process "https://github.com/owner/repo/issues/1"

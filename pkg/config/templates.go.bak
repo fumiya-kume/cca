@@ -1,0 +1,519 @@
+package config
+
+import (
+	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
+	"text/template"
+	"time"
+
+	"gopkg.in/yaml.v3"
+	"github.com/fumiya-kume/cca/pkg/errors"
+)
+
+// ConfigTemplateOld represents a configuration template (deprecated, use agent_config_manager.ConfigTemplate)
+type ConfigTemplateOld struct {
+	Name        string                 `yaml:"name"`
+	Description string                 `yaml:"description"`
+	Category    string                 `yaml:"category"`
+	Tags        []string              `yaml:"tags"`
+	Template    map[string]interface{} `yaml:"template"`
+	Variables   []TemplateVariable     `yaml:"variables"`
+	Created     time.Time             `yaml:"created"`
+	Modified    time.Time             `yaml:"modified"`
+}
+
+// TemplateVariable represents a configurable variable in a template
+type TemplateVariable struct {
+	Name         string      `yaml:"name"`
+	Description  string      `yaml:"description"`
+	Type         string      `yaml:"type"` // string, int, bool, duration, path
+	DefaultValue interface{} `yaml:"default"`
+	Required     bool        `yaml:"required"`
+	Validation   string      `yaml:"validation"` // regex pattern for validation
+	Options      []string    `yaml:"options"`    // for enum-like variables
+}
+
+// TemplateManager manages configuration templates
+type TemplateManager struct {
+	templatesDir string
+	templates    map[string]*ConfigTemplate
+}
+
+// NewTemplateManager creates a new template manager
+func NewTemplateManager(templatesDir string) *TemplateManager {
+	if templatesDir == "" {
+		homeDir, _ := os.UserHomeDir()
+		templatesDir = filepath.Join(homeDir, ".config", "ccagents", "templates")
+	}
+	
+	return &TemplateManager{
+		templatesDir: templatesDir,
+		templates:    make(map[string]*ConfigTemplate),
+	}
+}
+
+// LoadTemplates loads all available templates
+func (tm *TemplateManager) LoadTemplates() error {
+	if err := os.MkdirAll(tm.templatesDir, 0755); err != nil {
+		return errors.NewError(errors.ErrorTypeFileSystem).
+			WithMessage("failed to create templates directory").
+			WithCause(err).
+			WithContext("templatesDir", tm.templatesDir).
+			Build()
+	}
+
+	// Create built-in templates if they don't exist
+	if err := tm.createBuiltinTemplates(); err != nil {
+		return err
+	}
+
+	// Load templates from directory
+	entries, err := os.ReadDir(tm.templatesDir)
+	if err != nil {
+		return errors.NewError(errors.ErrorTypeFileSystem).
+			WithMessage("failed to read templates directory").
+			WithCause(err).
+			WithContext("templatesDir", tm.templatesDir).
+			Build()
+	}
+
+	for _, entry := range entries {
+		if !entry.IsDir() && (strings.HasSuffix(entry.Name(), ".yaml") || strings.HasSuffix(entry.Name(), ".yml")) {
+			templatePath := filepath.Join(tm.templatesDir, entry.Name())
+			if err := tm.loadTemplate(templatePath); err != nil {
+				// Log error but continue loading other templates
+				continue
+			}
+		}
+	}
+
+	return nil
+}
+
+// GetTemplate returns a template by name
+func (tm *TemplateManager) GetTemplate(name string) (*ConfigTemplate, error) {
+	template, exists := tm.templates[name]
+	if !exists {
+		return nil, errors.ValidationError(fmt.Sprintf("template '%s' not found", name))
+	}
+	return template, nil
+}
+
+// ListTemplates returns all available templates
+func (tm *TemplateManager) ListTemplates() []*ConfigTemplate {
+	templates := make([]*ConfigTemplate, 0, len(tm.templates))
+	for _, template := range tm.templates {
+		templates = append(templates, template)
+	}
+	return templates
+}
+
+// ListTemplatesByCategory returns templates filtered by category
+func (tm *TemplateManager) ListTemplatesByCategory(category string) []*ConfigTemplate {
+	var templates []*ConfigTemplate
+	for _, template := range tm.templates {
+		if template.Category == category {
+			templates = append(templates, template)
+		}
+	}
+	return templates
+}
+
+// ApplyTemplate applies a template with provided variables
+func (tm *TemplateManager) ApplyTemplate(templateName string, variables map[string]interface{}) (*Config, error) {
+	template, err := tm.GetTemplate(templateName)
+	if err != nil {
+		return nil, err
+	}
+
+	// Validate required variables
+	if err := tm.validateTemplateVariables(template, variables); err != nil {
+		return nil, err
+	}
+
+	// Apply template variables
+	configData, err := tm.processTemplate(template, variables)
+	if err != nil {
+		return nil, err
+	}
+
+	// Parse as configuration
+	config := DefaultConfig()
+	if err := yaml.Unmarshal(configData, config); err != nil {
+		return nil, errors.NewError(errors.ErrorTypeValidation).
+			WithMessage("failed to parse template result as configuration").
+			WithCause(err).
+			WithContext("template", templateName).
+			Build()
+	}
+
+	// Apply environment overrides
+	config.ApplyEnvironmentOverrides()
+
+	// Validate the resulting configuration
+	if err := config.Validate(); err != nil {
+		return nil, errors.NewError(errors.ErrorTypeValidation).
+			WithMessage("template generated invalid configuration").
+			WithCause(err).
+			WithContext("template", templateName).
+			Build()
+	}
+
+	return config, nil
+}
+
+// SaveTemplate saves a template
+func (tm *TemplateManager) SaveTemplate(template *ConfigTemplate) error {
+	if template.Name == "" {
+		return errors.ValidationError("template name cannot be empty")
+	}
+
+	template.Modified = time.Now()
+	if template.Created.IsZero() {
+		template.Created = template.Modified
+	}
+
+	templatePath := filepath.Join(tm.templatesDir, template.Name+".yaml")
+	
+	data, err := yaml.Marshal(template)
+	if err != nil {
+		return errors.NewError(errors.ErrorTypeValidation).
+			WithMessage("failed to marshal template").
+			WithCause(err).
+			WithContext("template", template.Name).
+			Build()
+	}
+
+	if err := os.WriteFile(templatePath, data, 0644); err != nil {
+		return errors.NewError(errors.ErrorTypeFileSystem).
+			WithMessage("failed to save template").
+			WithCause(err).
+			WithContext("templatePath", templatePath).
+			Build()
+	}
+
+	tm.templates[template.Name] = template
+	return nil
+}
+
+// DeleteTemplate deletes a template
+func (tm *TemplateManager) DeleteTemplate(name string) error {
+	templatePath := filepath.Join(tm.templatesDir, name+".yaml")
+	
+	if err := os.Remove(templatePath); err != nil && !os.IsNotExist(err) {
+		return errors.NewError(errors.ErrorTypeFileSystem).
+			WithMessage("failed to delete template").
+			WithCause(err).
+			WithContext("templatePath", templatePath).
+			Build()
+	}
+
+	delete(tm.templates, name)
+	return nil
+}
+
+// loadTemplate loads a single template file
+func (tm *TemplateManager) loadTemplate(templatePath string) error {
+	data, err := os.ReadFile(templatePath)
+	if err != nil {
+		return err
+	}
+
+	var template ConfigTemplate
+	if err := yaml.Unmarshal(data, &template); err != nil {
+		return err
+	}
+
+	tm.templates[template.Name] = &template
+	return nil
+}
+
+// validateTemplateVariables validates that required variables are provided
+func (tm *TemplateManager) validateTemplateVariables(template *ConfigTemplate, variables map[string]interface{}) error {
+	for _, variable := range template.Variables {
+		value, provided := variables[variable.Name]
+		
+		if variable.Required && !provided {
+			return errors.ValidationError(fmt.Sprintf("required variable '%s' not provided", variable.Name))
+		}
+
+		if provided {
+			if err := tm.validateVariableValue(variable, value); err != nil {
+				return err
+			}
+		} else if variable.DefaultValue != nil {
+			variables[variable.Name] = variable.DefaultValue
+		}
+	}
+
+	return nil
+}
+
+// validateVariableValue validates a variable value against its constraints
+func (tm *TemplateManager) validateVariableValue(variable TemplateVariable, value interface{}) error {
+	// Type validation
+	switch variable.Type {
+	case "string":
+		if _, ok := value.(string); !ok {
+			return errors.ValidationError(fmt.Sprintf("variable '%s' must be a string", variable.Name))
+		}
+	case "int":
+		if _, ok := value.(int); !ok {
+			return errors.ValidationError(fmt.Sprintf("variable '%s' must be an integer", variable.Name))
+		}
+	case "bool":
+		if _, ok := value.(bool); !ok {
+			return errors.ValidationError(fmt.Sprintf("variable '%s' must be a boolean", variable.Name))
+		}
+	case "duration":
+		if str, ok := value.(string); ok {
+			if _, err := time.ParseDuration(str); err != nil {
+				return errors.ValidationError(fmt.Sprintf("variable '%s' must be a valid duration", variable.Name))
+			}
+		} else {
+			return errors.ValidationError(fmt.Sprintf("variable '%s' must be a duration string", variable.Name))
+		}
+	case "path":
+		if _, ok := value.(string); !ok {
+			return errors.ValidationError(fmt.Sprintf("variable '%s' must be a path string", variable.Name))
+		}
+	}
+
+	// Options validation
+	if len(variable.Options) > 0 {
+		valueStr := fmt.Sprintf("%v", value)
+		valid := false
+		for _, option := range variable.Options {
+			if option == valueStr {
+				valid = true
+				break
+			}
+		}
+		if !valid {
+			return errors.ValidationError(fmt.Sprintf("variable '%s' must be one of: %v", variable.Name, variable.Options))
+		}
+	}
+
+	return nil
+}
+
+// processTemplate processes a template with variables
+func (tm *TemplateManager) processTemplate(configTemplate *ConfigTemplate, variables map[string]interface{}) ([]byte, error) {
+	// Convert template to YAML string
+	templateData, err := yaml.Marshal(configTemplate.Template)
+	if err != nil {
+		return nil, err
+	}
+
+	// Create Go template
+	tmpl, err := template.New("config").Parse(string(templateData))
+	if err != nil {
+		return nil, errors.NewError(errors.ErrorTypeValidation).
+			WithMessage("failed to parse template").
+			WithCause(err).
+			Build()
+	}
+
+	// Execute template
+	var result strings.Builder
+	if err := tmpl.Execute(&result, variables); err != nil {
+		return nil, errors.NewError(errors.ErrorTypeValidation).
+			WithMessage("failed to execute template").
+			WithCause(err).
+			Build()
+	}
+
+	return []byte(result.String()), nil
+}
+
+// createBuiltinTemplates creates built-in configuration templates
+func (tm *TemplateManager) createBuiltinTemplates() error {
+	templates := []*ConfigTemplate{
+		{
+			Name:        "development",
+			Description: "Development configuration with debug logging and verbose output",
+			Category:    "environment",
+			Tags:        []string{"development", "debug"},
+			Template: map[string]interface{}{
+				"version": "1.0",
+				"claude": map[string]interface{}{
+					"command":       "{{.ClaudeCommand}}",
+					"timeout":       "{{.ClaudeTimeout}}",
+					"max_instances": 2,
+					"auto_start":    true,
+				},
+				"github": map[string]interface{}{
+					"default_labels": []string{"ccagents-generated", "development"},
+					"draft_pr":       true,
+					"auto_merge":     false,
+				},
+				"ui": map[string]interface{}{
+					"theme":            "dark",
+					"show_timestamps":  true,
+					"verbose_output":   true,
+					"viewport_buffer":  50000,
+					"refresh_interval": 50,
+				},
+				"workflow": map[string]interface{}{
+					"auto_review":            true,
+					"max_review_iterations":  2,
+					"commit_style":          "conventional",
+					"parallel_tasks":        false,
+				},
+				"logging": map[string]interface{}{
+					"level":  "debug",
+					"format": "text",
+				},
+			},
+			Variables: []TemplateVariable{
+				{
+					Name:         "ClaudeCommand",
+					Description:  "Path to Claude CLI command",
+					Type:         "string",
+					DefaultValue: "claude",
+					Required:     true,
+				},
+				{
+					Name:         "ClaudeTimeout",
+					Description:  "Timeout for Claude operations",
+					Type:         "duration",
+					DefaultValue: "10m",
+					Required:     false,
+				},
+			},
+		},
+		{
+			Name:        "production",
+			Description: "Production configuration with optimized settings",
+			Category:    "environment",
+			Tags:        []string{"production", "performance"},
+			Template: map[string]interface{}{
+				"version": "1.0",
+				"claude": map[string]interface{}{
+					"command":       "{{.ClaudeCommand}}",
+					"timeout":       "{{.ClaudeTimeout}}",
+					"max_instances": "{{.MaxInstances}}",
+					"auto_start":    true,
+				},
+				"github": map[string]interface{}{
+					"default_labels": []string{"ccagents-generated"},
+					"draft_pr":       false,
+					"auto_merge":     "{{.AutoMerge}}",
+				},
+				"ui": map[string]interface{}{
+					"theme":            "dark",
+					"show_timestamps":  false,
+					"verbose_output":   false,
+					"viewport_buffer":  10000,
+					"refresh_interval": 100,
+				},
+				"workflow": map[string]interface{}{
+					"auto_review":            true,
+					"max_review_iterations":  3,
+					"commit_style":          "conventional",
+					"parallel_tasks":        true,
+				},
+				"logging": map[string]interface{}{
+					"level":       "info",
+					"format":      "json",
+					"rotation":    true,
+					"max_size":    100,
+					"max_age":     30,
+					"max_backups": 5,
+				},
+			},
+			Variables: []TemplateVariable{
+				{
+					Name:         "ClaudeCommand",
+					Description:  "Path to Claude CLI command",
+					Type:         "string",
+					DefaultValue: "claude",
+					Required:     true,
+				},
+				{
+					Name:         "ClaudeTimeout",
+					Description:  "Timeout for Claude operations",
+					Type:         "duration",
+					DefaultValue: "5m",
+					Required:     false,
+				},
+				{
+					Name:         "MaxInstances",
+					Description:  "Maximum number of Claude instances",
+					Type:         "int",
+					DefaultValue: 3,
+					Required:     false,
+				},
+				{
+					Name:         "AutoMerge",
+					Description:  "Enable automatic PR merging",
+					Type:         "bool",
+					DefaultValue: false,
+					Required:     false,
+				},
+			},
+		},
+		{
+			Name:        "team",
+			Description: "Team collaboration configuration",
+			Category:    "collaboration",
+			Tags:        []string{"team", "collaboration", "review"},
+			Template: map[string]interface{}{
+				"version": "1.0",
+				"claude": map[string]interface{}{
+					"command":       "{{.ClaudeCommand}}",
+					"timeout":       "5m",
+					"max_instances": 2,
+					"auto_start":    true,
+				},
+				"github": map[string]interface{}{
+					"default_labels": []string{"ccagents-generated", "needs-review"},
+					"draft_pr":       true,
+					"auto_merge":     false,
+					"reviewers":      "{{.Reviewers}}",
+					"assignees":      "{{.Assignees}}",
+				},
+				"workflow": map[string]interface{}{
+					"auto_review":            false,
+					"max_review_iterations":  1,
+					"commit_style":          "conventional",
+					"parallel_tasks":        true,
+				},
+			},
+			Variables: []TemplateVariable{
+				{
+					Name:        "ClaudeCommand",
+					Description: "Path to Claude CLI command",
+					Type:        "string",
+					DefaultValue: "claude",
+					Required:    true,
+				},
+				{
+					Name:        "Reviewers",
+					Description: "Default reviewers for PRs",
+					Type:        "string",
+					Required:    false,
+				},
+				{
+					Name:        "Assignees",
+					Description: "Default assignees for PRs",
+					Type:        "string",
+					Required:    false,
+				},
+			},
+		},
+	}
+
+	for _, template := range templates {
+		templatePath := filepath.Join(tm.templatesDir, template.Name+".yaml")
+		if _, err := os.Stat(templatePath); os.IsNotExist(err) {
+			if err := tm.SaveTemplate(template); err != nil {
+				return err
+			}
+		}
+	}
+
+	return nil
+}

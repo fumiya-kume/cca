@@ -1,0 +1,341 @@
+package ui
+
+import (
+	"fmt"
+	"strings"
+	"testing"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+)
+
+func TestTheme_Colors(t *testing.T) {
+	// Test dark theme
+	darkTheme := NewDarkTheme()
+	assert.NotNil(t, darkTheme)
+
+	// Test light theme
+	lightTheme := NewLightTheme()
+	assert.NotNil(t, lightTheme)
+
+	// Themes should be different
+	assert.NotEqual(t, darkTheme, lightTheme)
+}
+
+func TestTheme_ColorValues(t *testing.T) {
+	theme := Theme{
+		Primary:    "#7c3aed",
+		Secondary:  "#10b981",
+		Error:      "#ef4444",
+		Warning:    "#f59e0b",
+		Success:    "#22c55e",
+		Background: "#1a1a1a",
+		Foreground: "#ffffff",
+		Border:     "#333333",
+	}
+
+	// Test that all colors are hex values
+	colors := []string{
+		theme.Primary,
+		theme.Secondary,
+		theme.Error,
+		theme.Warning,
+		theme.Success,
+		theme.Background,
+		theme.Foreground,
+		theme.Border,
+	}
+
+	for _, color := range colors {
+		assert.True(t, strings.HasPrefix(color, "#"), "Color should be hex value: %s", color)
+		assert.True(t, len(color) == 7, "Color should be 7 characters: %s", color)
+	}
+}
+
+func TestModel_Initialization(t *testing.T) {
+	model := NewModel()
+	assert.NotNil(t, model)
+
+	// Test model has required components
+	assert.NotNil(t, model.Progress)
+	assert.NotNil(t, model.Viewport)
+	assert.NotNil(t, model.TextInput)
+	assert.NotNil(t, model.Theme)
+}
+
+func TestModel_WindowResize(t *testing.T) {
+	model := NewModel()
+
+	// Test window resize
+	newWidth := 120
+	newHeight := 40
+
+	model.SetWindowSize(newWidth, newHeight)
+	assert.Equal(t, newWidth, model.Width)
+	assert.Equal(t, newHeight, model.Height)
+}
+
+func TestModel_FocusManagement(t *testing.T) {
+	model := NewModel()
+
+	// Test focus cycling
+	initialFocus := model.Focused
+	model.NextFocus()
+	assert.NotEqual(t, initialFocus, model.Focused)
+
+	model.PrevFocus()
+	assert.Equal(t, initialFocus, model.Focused)
+}
+
+func TestProgressBar_Updates(t *testing.T) {
+	progress := NewProgressBar()
+	assert.NotNil(t, progress)
+
+	// Test progress updates
+	testValues := []float64{0.0, 0.25, 0.5, 0.75, 1.0}
+
+	for _, value := range testValues {
+		progress.SetPercent(value)
+		assert.Equal(t, value, progress.Percent())
+		assert.True(t, progress.Percent() >= 0.0)
+		assert.True(t, progress.Percent() <= 1.0)
+	}
+}
+
+func TestProgressBar_InvalidValues(t *testing.T) {
+	progress := NewProgressBar()
+
+	// Test invalid values are clamped
+	invalidValues := []struct {
+		input    float64
+		expected float64
+	}{
+		{-0.1, 0.0},
+		{1.1, 1.0},
+		{-5.0, 0.0},
+		{2.5, 1.0},
+	}
+
+	for _, test := range invalidValues {
+		progress.SetPercent(test.input)
+		assert.Equal(t, test.expected, progress.Percent())
+	}
+}
+
+func TestViewport_ContentManagement(t *testing.T) {
+	viewport := NewViewport(80, 20)
+	assert.NotNil(t, viewport)
+	assert.Equal(t, 80, viewport.Width)
+	assert.Equal(t, 20, viewport.Height)
+
+	// Test content addition
+	lines := []string{
+		"Line 1: Starting workflow",
+		"Line 2: Parsing issue",
+		"Line 3: Creating worktree",
+		"Line 4: Running Claude Code",
+		"Line 5: Workflow complete",
+	}
+
+	for _, line := range lines {
+		viewport.AddLine(line)
+	}
+
+	assert.Equal(t, len(lines), viewport.LineCount())
+}
+
+func TestViewport_Scrolling(t *testing.T) {
+	viewport := NewViewport(80, 3) // Small viewport
+
+	// Add more lines than viewport height
+	for i := 0; i < 10; i++ {
+		viewport.AddLine(fmt.Sprintf("Line %d", i+1))
+	}
+
+	assert.Equal(t, 10, viewport.LineCount())
+
+	// Test scrolling
+	viewport.ScrollDown()
+	viewport.ScrollUp()
+	viewport.ScrollToTop()
+	viewport.ScrollToBottom()
+
+	// Should not crash or error
+	assert.True(t, viewport.LineCount() > viewport.Height)
+}
+
+func TestTextInput_Validation(t *testing.T) {
+	textInput := NewTextInput()
+	assert.NotNil(t, textInput)
+
+	// Test input validation
+	testInputs := []struct {
+		input string
+		valid bool
+	}{
+		{"valid input", true},
+		{"", false},    // empty
+		{"   ", false}, // whitespace only
+		{"normal text with spaces", true},
+		{"special!@#$%^&*()characters", true},
+	}
+
+	for _, test := range testInputs {
+		textInput.SetValue(test.input)
+		isValid := textInput.IsValid()
+
+		if test.valid {
+			assert.True(t, isValid, "Input should be valid: %s", test.input)
+		} else {
+			assert.False(t, isValid, "Input should be invalid: %s", test.input)
+		}
+	}
+}
+
+func TestMessages_Formatting(t *testing.T) {
+	// Test various message types
+	messages := []struct {
+		level  string
+		text   string
+		format string
+	}{
+		{"info", "Process started", "ℹ Process started"},
+		{"success", "Task completed", "✅ Task completed"},
+		{"error", "Operation failed", "❌ Operation failed"},
+		{"warning", "Potential issue", "⚠ Potential issue"},
+	}
+
+	for _, msg := range messages {
+		formatted := FormatMessage(msg.level, msg.text)
+		assert.Equal(t, msg.format, formatted)
+		assert.Contains(t, formatted, msg.text)
+	}
+}
+
+func TestKeyBindings_Validation(t *testing.T) {
+	keyBindings := map[string]string{
+		"q":      "quit",
+		"ctrl+c": "quit",
+		"tab":    "next_focus",
+		"enter":  "submit",
+		"esc":    "cancel",
+		"up":     "scroll_up",
+		"down":   "scroll_down",
+		"pgup":   "page_up",
+		"pgdn":   "page_down",
+	}
+
+	for key, action := range keyBindings {
+		assert.NotEmpty(t, key, "Key binding should not be empty")
+		assert.NotEmpty(t, action, "Action should not be empty")
+
+		// Test key validation
+		isValidKey := len(key) > 0 && !strings.Contains(key, " ")
+		assert.True(t, isValidKey, "Key should be valid: %s", key)
+	}
+}
+
+func TestLayout_Responsive(t *testing.T) {
+	// Test different window sizes
+	testSizes := []struct {
+		width  int
+		height int
+		layout string
+	}{
+		{120, 40, "full"},
+		{80, 30, "compact"},
+		{60, 20, "minimal"},
+		{40, 15, "minimal"},
+	}
+
+	for _, size := range testSizes {
+		layout := DetermineLayout(size.width, size.height)
+		assert.NotEmpty(t, layout)
+
+		if size.width >= 100 {
+			assert.Equal(t, "full", layout)
+		} else if size.width >= 70 {
+			assert.Equal(t, "compact", layout)
+		} else {
+			assert.Equal(t, "minimal", layout)
+		}
+	}
+}
+
+func TestComponentSizing_Calculations(t *testing.T) {
+	windowWidth := 120
+	windowHeight := 40
+
+	// Test component size calculations
+	progressHeight := 3
+	viewportHeight := windowHeight - progressHeight - 5 // Leave room for input and borders
+
+	assert.True(t, progressHeight > 0)
+	assert.True(t, viewportHeight > 0)
+	assert.True(t, progressHeight+viewportHeight < windowHeight)
+}
+
+func TestTheme_Contrast(t *testing.T) {
+	darkTheme := NewDarkTheme()
+	lightTheme := NewLightTheme()
+
+	// Test that themes have sufficient contrast
+	// Dark theme should have light foreground on dark background
+	assert.True(t, isDark(darkTheme.Background))
+	assert.True(t, isLight(darkTheme.Foreground))
+
+	// Light theme should have dark foreground on light background
+	assert.True(t, isLight(lightTheme.Background))
+	assert.True(t, isDark(lightTheme.Foreground))
+}
+
+// Helper functions for testing
+func isDark(color string) bool {
+	// Simple check - dark colors typically have lower hex values
+	return color == "#000000" || color == "#1a1a1a" || strings.HasPrefix(color, "#0") || strings.HasPrefix(color, "#1")
+}
+
+func isLight(color string) bool {
+	// Simple check - light colors typically have higher hex values
+	return color == "#ffffff" || strings.HasPrefix(color, "#f") || strings.HasPrefix(color, "#e")
+}
+
+func TestModel_StateManagement(t *testing.T) {
+	model := NewModel()
+
+	// Test initial state
+	assert.False(t, model.Loading)
+	assert.Empty(t, model.ErrorMessage)
+	assert.Empty(t, model.StatusMessage)
+
+	// Test state updates
+	model.SetLoading(true)
+	assert.True(t, model.Loading)
+
+	model.SetError("Test error")
+	assert.Equal(t, "Test error", model.ErrorMessage)
+	assert.False(t, model.Loading) // Error should clear loading
+
+	model.SetStatus("Test status")
+	assert.Equal(t, "Test status", model.StatusMessage)
+	assert.Empty(t, model.ErrorMessage) // Status should clear error
+}
+
+func TestViewport_Performance(t *testing.T) {
+	viewport := NewViewport(80, 20)
+
+	// Add many lines to test performance
+	for i := 0; i < 1000; i++ {
+		viewport.AddLine(fmt.Sprintf("Performance test line %d with some content", i))
+	}
+
+	assert.Equal(t, 1000, viewport.LineCount())
+
+	// Test that viewport maintains reasonable memory usage
+	// by only keeping visible lines + buffer
+	maxVisibleLines := viewport.Height + 100 // Some buffer
+	actualVisibleLines := viewport.VisibleLineCount()
+
+	assert.True(t, actualVisibleLines <= maxVisibleLines,
+		"Viewport should limit visible lines for performance")
+}

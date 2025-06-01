@@ -1,0 +1,218 @@
+# Production Environment Configuration
+# This configuration is designed for production environments
+# Perfect for: Production deployments, enterprise environments, critical systems
+
+version: "1.0"
+
+# GitHub Repository Configuration (Production)
+github:
+  owner: "mycompany"
+  repo: "production-app"
+  default_branch: "main"            # Use main branch for production
+  api_version: "2022-11-28"         # Explicit API version
+  timeout: 90s                      # Longer timeout for production stability
+  max_retries: 5                    # More retries for reliability
+  retry_delay: 5s                   # Longer delay between retries
+  
+  # Production pull request settings
+  pr:
+    template: ".github/pr_template.md"
+    auto_delete_branch: true        # Clean up after merge
+    draft: false                    # Create production-ready PRs
+    labels: ["production", "automated", "needs-review"]
+    assignees: ["tech-lead", "senior-dev"]
+    reviewers: ["code-reviewer", "security-reviewer"]
+    team_reviewers: ["senior-team", "security-team"]
+  
+  # Strict branch protection for production
+  protection:
+    required_status_checks: ["ci", "security-scan", "integration-tests", "performance-tests"]
+    enforce_admins: true            # No exceptions for admins
+    dismiss_stale_reviews: true     # Ensure fresh reviews
+    require_code_owner_reviews: true # Require code owner approval
+
+# Claude AI Configuration (Production-grade)
+claude:
+  model: "claude-3-sonnet-20240229" # Most capable model for production
+  max_tokens: 8192                  # Large token limit for complex tasks
+  temperature: 0.05                 # Very conservative for production
+  timeout: 120s                     # Generous timeout for complex operations
+  max_retries: 3                    # Retry on failures
+  retry_delay: 10s                  # Longer delay for stability
+  
+  # Production prompts configuration
+  prompts:
+    system_prompt: |
+      You are a senior software engineer working on production systems.
+      Follow these strict principles:
+      - Write bulletproof, production-ready code
+      - Include comprehensive error handling and logging
+      - Follow security best practices
+      - Add detailed documentation and comments
+      - Include extensive unit and integration tests
+      - Consider scalability and performance implications
+      - Follow the team's coding standards and patterns
+      - Never introduce breaking changes without explicit approval
+    
+    code_style: |
+      Production coding standards:
+      - Use strongly typed interfaces and strict null checks
+      - Implement proper error boundaries and graceful degradation
+      - Add comprehensive logging with structured data
+      - Include performance monitoring and metrics
+      - Follow SOLID principles and clean architecture
+      - Implement proper dependency injection and testability
+      - Use immutable data structures where possible
+      - Include proper input validation and sanitization
+
+# Workflow Configuration (Production)
+workflow:
+  # Safety settings - maximum protection
+  enable_auto_merge: false          # NEVER auto-merge in production
+  require_review: true              # Always require human review
+  review_timeout: 72h               # Extended review window
+  
+  # Comprehensive quality assurance
+  run_tests: true                   # Always run full test suite
+  test_command: "make test-all"     # Comprehensive test command
+  test_timeout: 45m                 # Long timeout for extensive tests
+  test_environment:                 # Production-like test environment
+    NODE_ENV: "production"
+    DATABASE_URL: "postgresql://test:test@db:5432/test_prod"
+    REDIS_URL: "redis://redis:6379/0"
+    LOG_LEVEL: "info"
+  
+  # Comprehensive security scanning
+  security_scan: true               # Mandatory security scanning
+  security_tools: ["semgrep", "gosec", "snyk", "sonar", "bandit"]
+  security_timeout: 20m             # Extended timeout for thorough scanning
+  
+  # Code quality enforcement
+  run_linter: true
+  lint_command: "make lint-strict"  # Strict linting rules
+  run_formatter: true
+  format_command: "make format-check"  # Verify formatting
+  
+  # Comprehensive pre/post hooks
+  pre_hooks:
+    - "make deps-production"        # Install production dependencies
+    - "make lint-strict"            # Strict linting
+    - "make type-check-strict"      # Strict type checking
+    - "make security-baseline"      # Security baseline check
+    - "make vulnerability-scan"     # Vulnerability scanning
+  post_hooks:
+    - "make docs-production"        # Generate production docs
+    - "make changelog-update"       # Update changelog
+    - "make metrics-collect"        # Collect build metrics
+    - "make compliance-check"       # Compliance verification
+    - "make performance-baseline"   # Performance baseline
+  
+  # Production branch management
+  branch_prefix: "release/"         # Use release/ prefix
+  branch_cleanup: true              # Clean up after merge
+  target_branch: "main"             # Target main branch
+  
+  # Performance settings
+  parallel_tasks: 2                 # Conservative parallelism
+  batch_size: 5                     # Smaller batches for stability
+  max_retries: 5                    # More retries for reliability
+  retry_delay: 60s                  # Longer delays for stability
+  retry_backoff: "exponential"      # Exponential backoff
+
+# User Interface Configuration (Production)
+ui:
+  theme: "auto"                     # Auto-detect theme
+  show_progress: true               # Show progress for transparency
+  enable_notifications: false      # Disable to reduce noise
+  layout: "compact"                 # Compact layout for efficiency
+
+# Logging Configuration (Production)
+logging:
+  level: "info"                     # Production log level
+  format: "json"                    # Structured logging
+  output: "file"                    # Log to file
+  file_path: "/var/log/ccagents/production.log"
+  
+  # Log rotation for production
+  max_size: 500                     # 500MB max file size
+  max_age: 30                       # Keep logs for 30 days
+  max_backups: 20                   # Keep 20 backup files
+  compress: true                    # Compress old logs
+  
+  # Production log filtering
+  filters: ["github.api.debug", "claude.requests.debug"]
+  
+  # Log sampling for high volume
+  sampling:
+    enabled: true                   # Enable sampling
+    rate: 0.1                       # Sample 10% of debug logs
+
+# Performance Configuration (Production)
+performance:
+  max_memory: "4GB"                 # Generous memory limit
+  gc_percent: 50                    # Aggressive garbage collection
+  
+  # Production caching
+  cache:
+    enabled: true                   # Enable caching
+    size: 1000                      # Large cache size (1GB)
+    ttl: 8h                         # Long TTL for stability
+    cleanup_interval: 30m           # Regular cleanup
+  
+  # Connection pooling
+  connections:
+    max_idle: 20                    # More idle connections
+    max_open: 200                   # Higher connection limit
+    max_lifetime: 4h                # Longer connection lifetime
+  
+  # Resource limits
+  limits:
+    max_goroutines: 500             # High concurrency limit
+    max_files: 2000                 # High file limit
+    max_cpu_percent: 60             # Conservative CPU usage
+
+# Observability Configuration (Production)
+observability:
+  # Comprehensive metrics
+  metrics:
+    enabled: true                   # Enable metrics collection
+    port: 9090                      # Prometheus metrics port
+    path: "/metrics"                # Metrics endpoint
+  
+  # Distributed tracing
+  tracing:
+    enabled: true                   # Enable tracing
+    endpoint: "http://jaeger.monitoring:14268"
+    service_name: "ccagents-production"
+    sample_rate: 0.1                # Sample 10% of traces
+  
+  # Health checks
+  health:
+    enabled: true                   # Enable health checks
+    port: 8080                      # Health check port
+    path: "/health"                 # Health endpoint
+    timeout: 30s                    # Health check timeout
+  
+  # Profiling (disabled in production by default)
+  profiling:
+    enabled: false                  # Disable profiling for security
+    port: 6060                      # Profiling port (if enabled)
+
+# Production environment variables (secure):
+# export CCAGENTS_CONFIG_PATH="/etc/ccagents/production.yaml"
+# export CCAGENTS_LOG_LEVEL="info"
+# export CCAGENTS_GITHUB_TOKEN="$GITHUB_PRODUCTION_TOKEN"
+# export CCAGENTS_CLAUDE_API_KEY="$CLAUDE_PRODUCTION_KEY"
+# export CCAGENTS_ENVIRONMENT="production"
+
+# Production deployment checklist:
+# 1. Validate configuration: ccagents validate --strict
+# 2. Test authentication: ccagents auth status
+# 3. Verify connectivity: ccagents test --all
+# 4. Run security scan: ccagents security-scan --all
+# 5. Check resource limits: ccagents resource-check
+# 6. Monitor metrics: ccagents metrics --export
+# 7. Set up alerts and monitoring
+# 8. Configure log aggregation
+# 9. Set up automated backups
+# 10. Verify disaster recovery procedures

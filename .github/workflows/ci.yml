@@ -1,0 +1,108 @@
+name: CI
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
+
+env:
+  GO_VERSION: '1.24'
+  # CI optimization settings
+  GOMAXPROCS: 4
+  GO_TEST_TIMEOUT: '2m'
+  GO_TEST_SHORT: 'true'
+
+jobs:
+  # Fast smoke test that runs in parallel
+  fast-check:
+    name: Fast Check
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Run DevContainer Action
+      uses: devcontainers/ci@v0.3
+      with:
+        imageName: ghcr.io/fumiya-kume/cca-devcontainer
+        cacheFrom: ghcr.io/fumiya-kume/cca-devcontainer
+        push: never
+        runCmd: make ci-test-fast
+
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+    needs: fast-check
+    strategy:
+      matrix:
+        test-type: [unit, integration]
+      fail-fast: false
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Run DevContainer Action - ${{ matrix.test-type }}
+      uses: devcontainers/ci@v0.3
+      with:
+        imageName: ghcr.io/fumiya-kume/cca-devcontainer
+        cacheFrom: ghcr.io/fumiya-kume/cca-devcontainer
+        push: never
+        runCmd: |
+          go mod verify
+          make ci-test-${{ matrix.test-type }}
+
+  lint:
+      name: Lint
+      runs-on: ubuntu-latest
+      steps:
+        - name: Checkout code
+          uses: actions/checkout@v4
+        
+        - name: Run DevContainer Action - Lint
+          uses: devcontainers/ci@v0.3
+          with:
+            imageName: ghcr.io/fumiya-kume/cca-devcontainer
+            cacheFrom: ghcr.io/fumiya-kume/cca-devcontainer
+            push: never
+            runCmd: make ci-lint
+
+  build:
+    name: Build
+    runs-on: ubuntu-latest
+    # Run build in parallel with tests
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Run DevContainer Action - Build
+      uses: devcontainers/ci@v0.3
+      with:
+        imageName: ghcr.io/fumiya-kume/cca-devcontainer
+        cacheFrom: ghcr.io/fumiya-kume/cca-devcontainer
+        push: never
+        runCmd: |
+          make ci-build
+          ./ccagents --version
+          ./ccagents --help
+
+  mod-tidy:
+    name: Check go mod tidy
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Run DevContainer Action - Mod Tidy
+      uses: devcontainers/ci@v0.3
+      with:
+        imageName: ghcr.io/fumiya-kume/cca-devcontainer
+        cacheFrom: ghcr.io/fumiya-kume/cca-devcontainer
+        push: never
+        runCmd: |
+          go mod tidy
+          git diff --exit-code -- go.mod go.sum

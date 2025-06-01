@@ -1,0 +1,374 @@
+package config
+
+import (
+	"fmt"
+	"os"
+	"path/filepath"
+	"regexp"
+	"time"
+
+	"github.com/fumiya-kume/cca/pkg/errors"
+)
+
+// ValidationLevel represents the strictness of validation
+type ValidationLevel int
+
+const (
+	ValidationLevelBasic ValidationLevel = iota
+	ValidationLevelStrict
+	ValidationLevelComplete
+)
+
+// ConfigValidator provides comprehensive configuration validation
+type ConfigValidator struct {
+	level ValidationLevel
+}
+
+// NewConfigValidator creates a new configuration validator
+func NewConfigValidator(level ValidationLevel) *ConfigValidator {
+	return &ConfigValidator{
+		level: level,
+	}
+}
+
+// ValidationError represents a configuration validation error
+type ValidationError struct {
+	Field   string
+	Value   interface{}
+	Message string
+	Cause   error
+}
+
+func (ve *ValidationError) Error() string {
+	if ve.Cause != nil {
+		return fmt.Sprintf("validation error in field '%s': %s (cause: %v)", ve.Field, ve.Message, ve.Cause)
+	}
+	return fmt.Sprintf("validation error in field '%s': %s", ve.Field, ve.Message)
+}
+
+// ValidationResult contains the results of configuration validation
+type ValidationResult struct {
+	Valid    bool
+	Errors   []ValidationError
+	Warnings []ValidationError
+}
+
+// AddError adds a validation error
+func (vr *ValidationResult) AddError(field, message string, value interface{}, cause error) {
+	vr.Valid = false
+	vr.Errors = append(vr.Errors, ValidationError{
+		Field:   field,
+		Value:   value,
+		Message: message,
+		Cause:   cause,
+	})
+}
+
+// AddWarning adds a validation warning
+func (vr *ValidationResult) AddWarning(field, message string, value interface{}) {
+	vr.Warnings = append(vr.Warnings, ValidationError{
+		Field:   field,
+		Value:   value,
+		Message: message,
+	})
+}
+
+// HasErrors returns true if there are validation errors
+func (vr *ValidationResult) HasErrors() bool {
+	return len(vr.Errors) > 0
+}
+
+// HasWarnings returns true if there are validation warnings
+func (vr *ValidationResult) HasWarnings() bool {
+	return len(vr.Warnings) > 0
+}
+
+// ValidateConfig performs comprehensive configuration validation
+func (cv *ConfigValidator) ValidateConfig(config *Config) *ValidationResult {
+	result := &ValidationResult{Valid: true}
+
+	cv.validateVersion(config, result)
+	cv.validateClaude(config, result)
+	cv.validateGitHub(config, result)
+	cv.validateUI(config, result)
+	cv.validateWorkflow(config, result)
+	cv.validateDevelopment(config, result)
+	cv.validateLogging(config, result)
+
+	if cv.level >= ValidationLevelStrict {
+		cv.validatePaths(config, result)
+		cv.validateCommands(config, result)
+	}
+
+	if cv.level >= ValidationLevelComplete {
+		cv.validatePerformance(config, result)
+		cv.validateSecurity(config, result)
+	}
+
+	return result
+}
+
+// validateVersion validates the configuration version
+func (cv *ConfigValidator) validateVersion(config *Config, result *ValidationResult) {
+	if config.Version == "" {
+		result.AddError("version", "version cannot be empty", config.Version, nil)
+		return
+	}
+
+	// Validate version format (semantic versioning)
+	versionRegex := regexp.MustCompile(`^\d+\.\d+(\.\d+)?$`)
+	if !versionRegex.MatchString(config.Version) {
+		result.AddError("version", "version must follow semantic versioning format (e.g., 1.0 or 1.0.0)", config.Version, nil)
+	}
+}
+
+// validateClaude validates Claude configuration
+func (cv *ConfigValidator) validateClaude(config *Config, result *ValidationResult) {
+	if config.Claude.Command == "" {
+		result.AddError("claude.command", "command cannot be empty", config.Claude.Command, nil)
+	}
+
+	if config.Claude.MaxInstances < 1 {
+		result.AddError("claude.max_instances", "must be at least 1", config.Claude.MaxInstances, nil)
+	} else if config.Claude.MaxInstances > 10 {
+		result.AddWarning("claude.max_instances", "high value may cause resource issues", config.Claude.MaxInstances)
+	}
+
+	if config.Claude.Timeout < time.Second {
+		result.AddError("claude.timeout", "must be at least 1 second", config.Claude.Timeout, nil)
+	} else if config.Claude.Timeout > 30*time.Minute {
+		result.AddWarning("claude.timeout", "very high timeout may cause hanging processes", config.Claude.Timeout)
+	}
+}
+
+// validateGitHub validates GitHub configuration
+func (cv *ConfigValidator) validateGitHub(config *Config, result *ValidationResult) {
+	// Validate labels format
+	for i, label := range config.GitHub.DefaultLabels {
+		if label == "" {
+			result.AddError(fmt.Sprintf("github.default_labels[%d]", i), "label cannot be empty", label, nil)
+		}
+		
+		// Label length validation (GitHub limit is 50 characters)
+		if len(label) > 50 {
+			result.AddError(fmt.Sprintf("github.default_labels[%d]", i), "label cannot exceed 50 characters", label, nil)
+		}
+	}
+
+	// Validate reviewers format (should be GitHub usernames)
+	usernameRegex := regexp.MustCompile(`^[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?$`)
+	for i, reviewer := range config.GitHub.Reviewers {
+		if reviewer == "" {
+			result.AddError(fmt.Sprintf("github.reviewers[%d]", i), "reviewer cannot be empty", reviewer, nil)
+		} else if !usernameRegex.MatchString(reviewer) {
+			result.AddError(fmt.Sprintf("github.reviewers[%d]", i), "invalid GitHub username format", reviewer, nil)
+		}
+	}
+
+	// Validate assignees format
+	for i, assignee := range config.GitHub.Assignees {
+		if assignee == "" {
+			result.AddError(fmt.Sprintf("github.assignees[%d]", i), "assignee cannot be empty", assignee, nil)
+		} else if !usernameRegex.MatchString(assignee) {
+			result.AddError(fmt.Sprintf("github.assignees[%d]", i), "invalid GitHub username format", assignee, nil)
+		}
+	}
+}
+
+// validateUI validates UI configuration
+func (cv *ConfigValidator) validateUI(config *Config, result *ValidationResult) {
+	validThemes := map[string]bool{
+		"dark":  true,
+		"light": true,
+		"auto":  true,
+	}
+	if !validThemes[config.UI.Theme] {
+		result.AddError("ui.theme", "must be one of: dark, light, auto", config.UI.Theme, nil)
+	}
+
+	if config.UI.ViewportBuffer < 100 {
+		result.AddError("ui.viewport_buffer", "must be at least 100", config.UI.ViewportBuffer, nil)
+	} else if config.UI.ViewportBuffer > 100000 {
+		result.AddWarning("ui.viewport_buffer", "very high buffer may cause memory issues", config.UI.ViewportBuffer)
+	}
+
+	if config.UI.RefreshInterval < 10 {
+		result.AddError("ui.refresh_interval", "must be at least 10ms", config.UI.RefreshInterval, nil)
+	} else if config.UI.RefreshInterval > 5000 {
+		result.AddWarning("ui.refresh_interval", "high refresh interval may cause poor user experience", config.UI.RefreshInterval)
+	}
+}
+
+// validateWorkflow validates workflow configuration
+func (cv *ConfigValidator) validateWorkflow(config *Config, result *ValidationResult) {
+	if config.Workflow.MaxReviewIterations < 1 {
+		result.AddError("workflow.max_review_iterations", "must be at least 1", config.Workflow.MaxReviewIterations, nil)
+	} else if config.Workflow.MaxReviewIterations > 10 {
+		result.AddWarning("workflow.max_review_iterations", "high value may cause long execution times", config.Workflow.MaxReviewIterations)
+	}
+
+	validCommitStyles := map[string]bool{
+		"conventional": true,
+		"simple":       true,
+		"angular":      true,
+	}
+	if !validCommitStyles[config.Workflow.CommitStyle] {
+		result.AddError("workflow.commit_style", "must be one of: conventional, simple, angular", config.Workflow.CommitStyle, nil)
+	}
+}
+
+// validateDevelopment validates development configuration
+func (cv *ConfigValidator) validateDevelopment(config *Config, result *ValidationResult) {
+	if config.Development.WorktreeBase == "" {
+		result.AddError("development.worktree_base", "worktree base path cannot be empty", config.Development.WorktreeBase, nil)
+	}
+
+	if config.Development.MaxWorktrees < 1 {
+		result.AddError("development.max_worktrees", "must be at least 1", config.Development.MaxWorktrees, nil)
+	} else if config.Development.MaxWorktrees > 50 {
+		result.AddWarning("development.max_worktrees", "high value may cause disk space issues", config.Development.MaxWorktrees)
+	}
+
+	// Validate cleanup age format
+	if config.Development.CleanupAge != "" {
+		if _, err := time.ParseDuration(config.Development.CleanupAge); err != nil {
+			result.AddError("development.cleanup_age", "invalid duration format", config.Development.CleanupAge, err)
+		}
+	}
+}
+
+// validateLogging validates logging configuration
+func (cv *ConfigValidator) validateLogging(config *Config, result *ValidationResult) {
+	validLevels := map[string]bool{
+		"debug": true,
+		"info":  true,
+		"warn":  true,
+		"error": true,
+		"fatal": true,
+	}
+	if !validLevels[config.Logging.Level] {
+		result.AddError("logging.level", "must be one of: debug, info, warn, error, fatal", config.Logging.Level, nil)
+	}
+
+	validFormats := map[string]bool{
+		"text": true,
+		"json": true,
+	}
+	if !validFormats[config.Logging.Format] {
+		result.AddError("logging.format", "must be one of: text, json", config.Logging.Format, nil)
+	}
+
+	if config.Logging.MaxSize < 1 {
+		result.AddError("logging.max_size", "must be at least 1 MB", config.Logging.MaxSize, nil)
+	} else if config.Logging.MaxSize > 1000 {
+		result.AddWarning("logging.max_size", "very large log files may cause performance issues", config.Logging.MaxSize)
+	}
+
+	if config.Logging.MaxAge < 1 {
+		result.AddError("logging.max_age", "must be at least 1 day", config.Logging.MaxAge, nil)
+	}
+
+	if config.Logging.MaxBackups < 0 {
+		result.AddError("logging.max_backups", "cannot be negative", config.Logging.MaxBackups, nil)
+	}
+}
+
+// validatePaths validates file and directory paths
+func (cv *ConfigValidator) validatePaths(config *Config, result *ValidationResult) {
+	// Validate worktree base path
+	if config.Development.WorktreeBase != "" {
+		if !filepath.IsAbs(config.Development.WorktreeBase) {
+			// Try to make it absolute relative to home directory
+			homeDir, err := os.UserHomeDir()
+			if err != nil {
+				result.AddError("development.worktree_base", "relative path provided but cannot determine home directory", config.Development.WorktreeBase, err)
+			} else {
+				absPath := filepath.Join(homeDir, config.Development.WorktreeBase)
+				result.AddWarning("development.worktree_base", fmt.Sprintf("relative path converted to absolute: %s", absPath), config.Development.WorktreeBase)
+			}
+		}
+	}
+
+	// Validate log file path
+	if config.Logging.File != "" {
+		logDir := filepath.Dir(config.Logging.File)
+		if err := os.MkdirAll(logDir, 0755); err != nil {
+			result.AddError("logging.file", "cannot create log directory", config.Logging.File, err)
+		}
+	}
+}
+
+// validateCommands validates external command availability
+func (cv *ConfigValidator) validateCommands(config *Config, result *ValidationResult) {
+	// Validate Claude command
+	if config.Claude.Command != "" {
+		if _, err := os.Stat(config.Claude.Command); err != nil {
+			// Try to find in PATH
+			if _, err := findCommandInPath(config.Claude.Command); err != nil {
+				result.AddWarning("claude.command", "command not found in PATH", config.Claude.Command)
+			}
+		}
+	}
+}
+
+// validatePerformance validates performance-related settings
+func (cv *ConfigValidator) validatePerformance(config *Config, result *ValidationResult) {
+	// Check for potentially resource-intensive configurations
+	totalMemoryEstimate := config.Claude.MaxInstances * 500 // MB per instance estimate
+	if totalMemoryEstimate > 4000 { // 4GB
+		result.AddWarning("performance", fmt.Sprintf("configuration may use approximately %d MB of memory", totalMemoryEstimate), nil)
+	}
+
+	// Check UI performance settings
+	if config.UI.RefreshInterval < 50 && config.UI.ViewportBuffer > 50000 {
+		result.AddWarning("performance", "combination of low refresh interval and large viewport buffer may cause UI lag", nil)
+	}
+}
+
+// validateSecurity validates security-related settings
+func (cv *ConfigValidator) validateSecurity(config *Config, result *ValidationResult) {
+	// Check for insecure configurations
+	if config.Logging.Level == "debug" {
+		result.AddWarning("security", "debug logging may expose sensitive information", config.Logging.Level)
+	}
+
+	// Check file permissions for sensitive paths
+	if config.Logging.File != "" {
+		if info, err := os.Stat(config.Logging.File); err == nil {
+			if info.Mode().Perm() > 0644 {
+				result.AddWarning("security", "log file has overly permissive permissions", config.Logging.File)
+			}
+		}
+	}
+}
+
+// findCommandInPath searches for a command in the system PATH
+func findCommandInPath(command string) (string, error) {
+	pathEnv := os.Getenv("PATH")
+	if pathEnv == "" {
+		return "", errors.ValidationError("PATH environment variable is empty")
+	}
+
+	for _, dir := range filepath.SplitList(pathEnv) {
+		if dir == "" {
+			continue
+		}
+		
+		cmdPath := filepath.Join(dir, command)
+		if info, err := os.Stat(cmdPath); err == nil && !info.IsDir() {
+			return cmdPath, nil
+		}
+		
+		// Also try with common executable extensions on Windows
+		if filepath.Ext(command) == "" {
+			for _, ext := range []string{".exe", ".cmd", ".bat"} {
+				cmdPathWithExt := cmdPath + ext
+				if info, err := os.Stat(cmdPathWithExt); err == nil && !info.IsDir() {
+					return cmdPathWithExt, nil
+				}
+			}
+		}
+	}
+
+	return "", errors.ValidationError(fmt.Sprintf("command '%s' not found in PATH", command))
+}

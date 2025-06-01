@@ -1,0 +1,42 @@
+version: "2"
+
+run:
+  timeout: 3m
+  issues-exit-code: 1
+  tests: true
+  concurrency: 4
+
+output:
+  formats:
+    text: {}
+
+linters:
+  default: none
+  enable:
+    - errcheck
+    - govet
+    - ineffassign
+    - misspell
+    - staticcheck
+    - unused
+    - goconst
+    - gocyclo
+    - gosec
+  settings:
+    errcheck:
+      check-type-assertions: true
+      check-blank: true
+    gocyclo:
+      min-complexity: 15
+    misspell:
+      locale: US
+    staticcheck:
+      checks:
+        - all
+  exclusions:
+    rules:
+      - path: _test\.go
+        linters:
+          - gocyclo
+          - errcheck
+          - gosec

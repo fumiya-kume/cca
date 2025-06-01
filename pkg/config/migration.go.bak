@@ -1,0 +1,513 @@
+package config
+
+import (
+	"fmt"
+	"os"
+	"path/filepath"
+	"strconv"
+	"strings"
+	"time"
+
+	"gopkg.in/yaml.v3"
+	"github.com/fumiya-kume/cca/pkg/errors"
+	"github.com/fumiya-kume/cca/pkg/logger"
+)
+
+// ConfigMigrationOld represents a configuration migration (deprecated, use agent_config_manager.ConfigMigration)
+type ConfigMigrationOld struct {
+	Version     string                           `yaml:"version"`
+	Description string                           `yaml:"description"`
+	Migrate     func(*Config) (*Config, error)   `yaml:"-"`
+	Rollback    func(*Config) (*Config, error)   `yaml:"-"`
+}
+
+// MigrationManager handles configuration migrations
+type MigrationManager struct {
+	migrations []ConfigMigrationOld
+	logger     logger.Logger
+}
+
+// NewMigrationManager creates a new migration manager
+func NewMigrationManager(logger logger.Logger) *MigrationManager {
+	mm := &MigrationManager{
+		migrations: make([]ConfigMigration, 0),
+		logger:     logger,
+	}
+	
+	// Register built-in migrations
+	mm.registerBuiltinMigrations()
+	
+	return mm
+}
+
+// RegisterMigration registers a new migration
+func (mm *MigrationManager) RegisterMigration(migration ConfigMigration) {
+	mm.migrations = append(mm.migrations, migration)
+}
+
+// MigrateConfig migrates configuration to the latest version
+func (mm *MigrationManager) MigrateConfig(config *Config) (*Config, error) {
+	if config == nil {
+		return nil, errors.ValidationError("config cannot be nil")
+	}
+
+	currentVersion := config.Version
+	if currentVersion == "" {
+		currentVersion = "0.0"
+	}
+
+	targetVersion := "1.0" // Current version
+	
+	if mm.logger != nil {
+		mm.logger.Info("Starting configuration migration", 
+			"currentVersion", currentVersion,
+			"targetVersion", targetVersion,
+		)
+	}
+
+	// Find applicable migrations
+	applicableMigrations := mm.getApplicableMigrations(currentVersion, targetVersion)
+	
+	if len(applicableMigrations) == 0 {
+		if mm.logger != nil {
+			mm.logger.Debug("No migrations needed")
+		}
+		return config, nil
+	}
+
+	// Create backup before migration
+	if err := mm.createMigrationBackup(config, currentVersion); err != nil {
+		if mm.logger != nil {
+			mm.logger.Warn("Failed to create migration backup", "error", err)
+		}
+	}
+
+	// Apply migrations
+	migratedConfig := config
+	for _, migration := range applicableMigrations {
+		if mm.logger != nil {
+			mm.logger.Info("Applying migration", 
+				"version", migration.Version,
+				"description", migration.Description,
+			)
+		}
+
+		var err error
+		migratedConfig, err = migration.Migrate(migratedConfig)
+		if err != nil {
+			return nil, errors.NewError(errors.ErrorTypeConfiguration).
+				WithMessage("migration failed").
+				WithCause(err).
+				WithContext("migrationVersion", migration.Version).
+				WithContext("description", migration.Description).
+				Build()
+		}
+
+		// Update version after successful migration
+		migratedConfig.Version = migration.Version
+	}
+
+	if mm.logger != nil {
+		mm.logger.Info("Configuration migration completed successfully", 
+			"finalVersion", migratedConfig.Version,
+		)
+	}
+
+	return migratedConfig, nil
+}
+
+// getApplicableMigrations returns migrations that need to be applied
+func (mm *MigrationManager) getApplicableMigrations(currentVersion, targetVersion string) []ConfigMigration {
+	var applicable []ConfigMigration
+
+	for _, migration := range mm.migrations {
+		if mm.shouldApplyMigration(currentVersion, migration.Version, targetVersion) {
+			applicable = append(applicable, migration)
+		}
+	}
+
+	return applicable
+}
+
+// shouldApplyMigration determines if a migration should be applied
+func (mm *MigrationManager) shouldApplyMigration(currentVersion, migrationVersion, targetVersion string) bool {
+	current := mm.parseVersion(currentVersion)
+	migration := mm.parseVersion(migrationVersion)
+	target := mm.parseVersion(targetVersion)
+
+	return migration.Compare(current) > 0 && migration.Compare(target) <= 0
+}
+
+// parseVersion parses a version string into comparable format
+func (mm *MigrationManager) parseVersion(version string) Version {
+	parts := strings.Split(version, ".")
+	
+	var major, minor, patch int
+	if len(parts) >= 1 {
+		major, _ = strconv.Atoi(parts[0])
+	}
+	if len(parts) >= 2 {
+		minor, _ = strconv.Atoi(parts[1])
+	}
+	if len(parts) >= 3 {
+		patch, _ = strconv.Atoi(parts[2])
+	}
+
+	return Version{Major: major, Minor: minor, Patch: patch}
+}
+
+// Version represents a semantic version
+type Version struct {
+	Major int
+	Minor int
+	Patch int
+}
+
+// Compare compares two versions
+// Returns: -1 if v < other, 0 if v == other, 1 if v > other
+func (v Version) Compare(other Version) int {
+	if v.Major != other.Major {
+		if v.Major > other.Major {
+			return 1
+		}
+		return -1
+	}
+
+	if v.Minor != other.Minor {
+		if v.Minor > other.Minor {
+			return 1
+		}
+		return -1
+	}
+
+	if v.Patch != other.Patch {
+		if v.Patch > other.Patch {
+			return 1
+		}
+		return -1
+	}
+
+	return 0
+}
+
+// String returns the string representation of the version
+func (v Version) String() string {
+	return fmt.Sprintf("%d.%d.%d", v.Major, v.Minor, v.Patch)
+}
+
+// createMigrationBackup creates a backup before migration
+func (mm *MigrationManager) createMigrationBackup(config *Config, version string) error {
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		return err
+	}
+
+	backupDir := filepath.Join(homeDir, ".config", "ccagents", "migration-backups")
+	if err := os.MkdirAll(backupDir, 0755); err != nil {
+		return err
+	}
+
+	timestamp := time.Now().Format("20060102-150405")
+	backupName := fmt.Sprintf("config-v%s-%s.yaml", version, timestamp)
+	backupPath := filepath.Join(backupDir, backupName)
+
+	data, err := yaml.Marshal(config)
+	if err != nil {
+		return err
+	}
+
+	return os.WriteFile(backupPath, data, 0644)
+}
+
+// registerBuiltinMigrations registers built-in configuration migrations
+func (mm *MigrationManager) registerBuiltinMigrations() {
+	// Migration from 0.x to 1.0
+	mm.RegisterMigration(ConfigMigration{
+		Version:     "1.0",
+		Description: "Migrate to version 1.0 configuration format",
+		Migrate: func(config *Config) (*Config, error) {
+			// Ensure all required fields are present with defaults
+			if config.Claude.Command == "" {
+				config.Claude.Command = "claude"
+			}
+			if config.Claude.MaxInstances == 0 {
+				config.Claude.MaxInstances = 3
+			}
+			if config.Claude.Timeout == 0 {
+				config.Claude.Timeout = 5 * time.Minute
+			}
+			if !config.Claude.AutoStart {
+				config.Claude.AutoStart = true
+			}
+
+			// Migrate GitHub configuration
+			if len(config.GitHub.DefaultLabels) == 0 {
+				config.GitHub.DefaultLabels = []string{"ccagents-generated"}
+			}
+
+			// Migrate UI configuration
+			if config.UI.Theme == "" {
+				config.UI.Theme = "dark"
+			}
+			if config.UI.ViewportBuffer == 0 {
+				config.UI.ViewportBuffer = 10000
+			}
+			if config.UI.RefreshInterval == 0 {
+				config.UI.RefreshInterval = 100
+			}
+
+			// Migrate Workflow configuration
+			if config.Workflow.CommitStyle == "" {
+				config.Workflow.CommitStyle = "conventional"
+			}
+			if config.Workflow.MaxReviewIterations == 0 {
+				config.Workflow.MaxReviewIterations = 3
+			}
+
+			// Migrate Development configuration
+			if config.Development.WorktreeBase == "" {
+				homeDir, _ := os.UserHomeDir()
+				config.Development.WorktreeBase = filepath.Join(homeDir, ".ccagents", "worktrees")
+			}
+			if config.Development.MaxWorktrees == 0 {
+				config.Development.MaxWorktrees = 10
+			}
+			if config.Development.CleanupAge == "" {
+				config.Development.CleanupAge = "168h" // 7 days
+			}
+
+			// Migrate Logging configuration
+			if config.Logging.Level == "" {
+				config.Logging.Level = "info"
+			}
+			if config.Logging.Format == "" {
+				config.Logging.Format = "text"
+			}
+			if config.Logging.File == "" {
+				homeDir, _ := os.UserHomeDir()
+				config.Logging.File = filepath.Join(homeDir, ".ccagents", "logs", "ccagents.log")
+			}
+			if config.Logging.MaxSize == 0 {
+				config.Logging.MaxSize = 100
+			}
+			if config.Logging.MaxAge == 0 {
+				config.Logging.MaxAge = 30
+			}
+			if config.Logging.MaxBackups == 0 {
+				config.Logging.MaxBackups = 5
+			}
+
+			return config, nil
+		},
+		Rollback: func(config *Config) (*Config, error) {
+			// Simple rollback - just change version
+			config.Version = "0.9"
+			return config, nil
+		},
+	})
+
+	// Example future migration (1.0 to 1.1)
+	mm.RegisterMigration(ConfigMigration{
+		Version:     "1.1",
+		Description: "Add new security and performance settings",
+		Migrate: func(config *Config) (*Config, error) {
+			// This would add new fields introduced in version 1.1
+			// For now, this is just a placeholder
+			return config, nil
+		},
+		Rollback: func(config *Config) (*Config, error) {
+			config.Version = "1.0"
+			return config, nil
+		},
+	})
+}
+
+// ProjectConfigManager manages project-specific configurations
+type ProjectConfigManager struct {
+	projectRoot string
+	globalPath  string
+	logger      logger.Logger
+}
+
+// NewProjectConfigManager creates a new project config manager
+func NewProjectConfigManager(projectRoot string, globalPath string, logger logger.Logger) *ProjectConfigManager {
+	return &ProjectConfigManager{
+		projectRoot: projectRoot,
+		globalPath:  globalPath,
+		logger:      logger,
+	}
+}
+
+// LoadProjectConfig loads project-specific configuration merged with global
+func (pcm *ProjectConfigManager) LoadProjectConfig() (*Config, error) {
+	// Load global configuration first
+	globalLoader := NewLoader(pcm.globalPath)
+	globalConfig, err := globalLoader.LoadConfig()
+	if err != nil {
+		return nil, errors.NewError(errors.ErrorTypeConfiguration).
+			WithMessage("failed to load global configuration").
+			WithCause(err).
+			Build()
+	}
+
+	// Look for project-specific config
+	projectConfigPaths := []string{
+		filepath.Join(pcm.projectRoot, ".ccagents.yaml"),
+		filepath.Join(pcm.projectRoot, ".ccagents.yml"),
+		filepath.Join(pcm.projectRoot, ".ccagents", "config.yaml"),
+		filepath.Join(pcm.projectRoot, ".ccagents", "config.yml"),
+	}
+
+	var projectConfig *Config
+	for _, path := range projectConfigPaths {
+		if _, err := os.Stat(path); err == nil {
+			projectLoader := NewLoader(path)
+			projectConfig, err = projectLoader.LoadConfig()
+			if err != nil {
+				if pcm.logger != nil {
+					pcm.logger.Warn("Failed to load project config", 
+						"path", path,
+						"error", err,
+					)
+				}
+				continue
+			}
+			
+			if pcm.logger != nil {
+				pcm.logger.Info("Loaded project configuration", "path", path)
+			}
+			break
+		}
+	}
+
+	// If no project config found, return global config
+	if projectConfig == nil {
+		return globalConfig, nil
+	}
+
+	// Merge project config with global config
+	mergedConfig, err := pcm.mergeConfigurations(globalConfig, projectConfig)
+	if err != nil {
+		return nil, err
+	}
+
+	return mergedConfig, nil
+}
+
+// mergeConfigurations merges project configuration with global configuration
+func (pcm *ProjectConfigManager) mergeConfigurations(global, project *Config) (*Config, error) {
+	// Start with global config as base
+	merged := *global
+
+	// Override with project-specific settings
+	if project.Claude.Command != "" {
+		merged.Claude.Command = project.Claude.Command
+	}
+	if project.Claude.Timeout != 0 {
+		merged.Claude.Timeout = project.Claude.Timeout
+	}
+	if project.Claude.MaxInstances != 0 {
+		merged.Claude.MaxInstances = project.Claude.MaxInstances
+	}
+	merged.Claude.AutoStart = project.Claude.AutoStart // boolean override
+
+	// GitHub settings
+	if len(project.GitHub.DefaultLabels) > 0 {
+		merged.GitHub.DefaultLabels = project.GitHub.DefaultLabels
+	}
+	if len(project.GitHub.Reviewers) > 0 {
+		merged.GitHub.Reviewers = project.GitHub.Reviewers
+	}
+	if len(project.GitHub.Assignees) > 0 {
+		merged.GitHub.Assignees = project.GitHub.Assignees
+	}
+	merged.GitHub.DraftPR = project.GitHub.DraftPR       // boolean override
+	merged.GitHub.AutoMerge = project.GitHub.AutoMerge   // boolean override
+
+	// UI settings
+	if project.UI.Theme != "" {
+		merged.UI.Theme = project.UI.Theme
+	}
+	if project.UI.ViewportBuffer != 0 {
+		merged.UI.ViewportBuffer = project.UI.ViewportBuffer
+	}
+	if project.UI.RefreshInterval != 0 {
+		merged.UI.RefreshInterval = project.UI.RefreshInterval
+	}
+	merged.UI.ShowTimestamps = project.UI.ShowTimestamps // boolean override
+	merged.UI.VerboseOutput = project.UI.VerboseOutput   // boolean override
+
+	// Workflow settings
+	if project.Workflow.CommitStyle != "" {
+		merged.Workflow.CommitStyle = project.Workflow.CommitStyle
+	}
+	if project.Workflow.MaxReviewIterations != 0 {
+		merged.Workflow.MaxReviewIterations = project.Workflow.MaxReviewIterations
+	}
+	merged.Workflow.AutoReview = project.Workflow.AutoReview     // boolean override
+	merged.Workflow.ParallelTasks = project.Workflow.ParallelTasks // boolean override
+	merged.Workflow.SkipCI = project.Workflow.SkipCI             // boolean override
+
+	// Development settings
+	if project.Development.WorktreeBase != "" {
+		merged.Development.WorktreeBase = project.Development.WorktreeBase
+	}
+	if project.Development.MaxWorktrees != 0 {
+		merged.Development.MaxWorktrees = project.Development.MaxWorktrees
+	}
+	if project.Development.CleanupAge != "" {
+		merged.Development.CleanupAge = project.Development.CleanupAge
+	}
+	merged.Development.KeepWorktrees = project.Development.KeepWorktrees // boolean override
+
+	// Logging settings (usually not overridden at project level, but possible)
+	if project.Logging.Level != "" {
+		merged.Logging.Level = project.Logging.Level
+	}
+	if project.Logging.Format != "" {
+		merged.Logging.Format = project.Logging.Format
+	}
+
+	// Apply environment overrides
+	merged.ApplyEnvironmentOverrides()
+
+	return &merged, nil
+}
+
+// CreateProjectConfig creates a project-specific configuration template
+func (pcm *ProjectConfigManager) CreateProjectConfig(template string) error {
+	templateManager := NewTemplateManager("")
+	if err := templateManager.LoadTemplates(); err != nil {
+		return err
+	}
+
+	// Apply template with minimal variables
+	variables := map[string]interface{}{
+		"ClaudeCommand": "claude",
+		"ClaudeTimeout": "5m",
+		"MaxInstances":  2,
+		"AutoMerge":     false,
+	}
+
+	config, err := templateManager.ApplyTemplate(template, variables)
+	if err != nil {
+		return err
+	}
+
+	// Save to project directory
+	projectConfigPath := filepath.Join(pcm.projectRoot, ".ccagents.yaml")
+	loader := NewLoader(projectConfigPath)
+	
+	if err := loader.SaveConfig(config); err != nil {
+		return err
+	}
+
+	if pcm.logger != nil {
+		pcm.logger.Info("Created project configuration", 
+			"path", projectConfigPath,
+			"template", template,
+		)
+	}
+
+	return nil
+}

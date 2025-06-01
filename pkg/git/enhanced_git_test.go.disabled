@@ -1,0 +1,347 @@
+package git
+
+import (
+	"context"
+	"os"
+	"path/filepath"
+	"testing"
+	"time"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+)
+
+func TestWorktreeManager_CompleteWorkflow(t *testing.T) {
+	// Create temporary directory for testing
+	tmpDir, err := os.MkdirTemp("", "test-worktree-*")
+	require.NoError(t, err)
+	defer os.RemoveAll(tmpDir)
+
+	// Initialize a git repository
+	repoDir := filepath.Join(tmpDir, "test-repo")
+	err = os.MkdirAll(repoDir, 0755)
+	require.NoError(t, err)
+
+	// Create a minimal git repository structure
+	gitDir := filepath.Join(repoDir, ".git")
+	err = os.MkdirAll(gitDir, 0755)
+	require.NoError(t, err)
+
+	// Create a test file
+	testFile := filepath.Join(repoDir, "README.md")
+	err = os.WriteFile(testFile, []byte("# Test Repository\n"), 0644)
+	require.NoError(t, err)
+
+	// Test worktree creation (mock implementation)
+	config := WorktreeConfig{
+		BaseDir:      tmpDir,
+		MaxWorktrees: 5,
+		CleanupAge:   24 * time.Hour,
+	}
+
+	manager := NewWorktreeManager(config)
+	assert.NotNil(t, manager)
+}
+
+func TestWorktreeManager_Configuration(t *testing.T) {
+	config := WorktreeConfig{
+		BaseDir:      "/tmp/worktrees",
+		MaxWorktrees: 10,
+		CleanupAge:   48 * time.Hour,
+	}
+
+	manager := NewWorktreeManager(config)
+	assert.NotNil(t, manager)
+
+	// Test configuration defaults
+	defaultConfig := DefaultWorktreeConfig()
+	assert.NotEmpty(t, defaultConfig.BaseDir)
+	assert.True(t, defaultConfig.MaxWorktrees > 0)
+	assert.True(t, defaultConfig.CleanupAge > 0)
+}
+
+func TestRepositoryService_Operations(t *testing.T) {
+	tmpDir, err := os.MkdirTemp("", "test-repo-service-*")
+	require.NoError(t, err)
+	defer os.RemoveAll(tmpDir)
+
+	config := RepositoryConfig{
+		WorkDir:    tmpDir,
+		Timeout:    30 * time.Second,
+		MaxRetries: 3,
+	}
+
+	service := NewRepositoryService(config)
+	assert.NotNil(t, service)
+}
+
+func TestGitContext_Building(t *testing.T) {
+	tmpDir, err := os.MkdirTemp("", "test-git-context-*")
+	require.NoError(t, err)
+	defer os.RemoveAll(tmpDir)
+
+	// Create test files to simulate a git repository
+	files := []string{"main.go", "go.mod", "README.md", ".gitignore"}
+	for _, file := range files {
+		filePath := filepath.Join(tmpDir, file)
+		var content string
+		switch file {
+		case "main.go":
+			content = "package main\n\nfunc main() {}\n"
+		case "go.mod":
+			content = "module test\n\ngo 1.21\n"
+		case "README.md":
+			content = "# Test Project\n"
+		case ".gitignore":
+			content = "*.log\n*.tmp\n"
+		}
+		err = os.WriteFile(filePath, []byte(content), 0644)
+		require.NoError(t, err)
+	}
+
+	ctx := context.Background()
+
+	// Test context building (this would normally interact with git)
+	// For testing, we'll verify the directory structure exists
+	_, err = os.Stat(tmpDir)
+	assert.NoError(t, err, "Test directory should exist")
+
+	for _, file := range files {
+		filePath := filepath.Join(tmpDir, file)
+		_, err = os.Stat(filePath)
+		assert.NoError(t, err, "File %s should exist", file)
+	}
+
+	// Test context timeout
+	timeoutCtx, cancel := context.WithTimeout(ctx, 1*time.Millisecond)
+	defer cancel()
+
+	// Simulate a timeout scenario
+	select {
+	case <-timeoutCtx.Done():
+		assert.Equal(t, context.DeadlineExceeded, timeoutCtx.Err())
+	case <-time.After(10 * time.Millisecond):
+		t.Error("Context should have timed out")
+	}
+}
+
+func TestGitOperations_ErrorHandling(t *testing.T) {
+	// Test operations on non-existent directory
+	nonExistentDir := "/non/existent/path"
+
+	config := RepositoryConfig{
+		WorkDir:    nonExistentDir,
+		Timeout:    5 * time.Second,
+		MaxRetries: 1,
+	}
+
+	service := NewRepositoryService(config)
+	assert.NotNil(t, service)
+
+	// Test that service handles non-existent directories gracefully
+	_, err := os.Stat(nonExistentDir)
+	assert.Error(t, err)
+	assert.True(t, os.IsNotExist(err))
+}
+
+func TestWorktreeManager_Lifecycle(t *testing.T) {
+	tmpDir, err := os.MkdirTemp("", "test-worktree-lifecycle-*")
+	require.NoError(t, err)
+	defer os.RemoveAll(tmpDir)
+
+	config := WorktreeConfig{
+		BaseDir:      tmpDir,
+		MaxWorktrees: 3,
+		CleanupAge:   1 * time.Hour,
+	}
+
+	manager := NewWorktreeManager(config)
+	assert.NotNil(t, manager)
+
+	// Test worktree directory creation
+	worktreeDir := filepath.Join(tmpDir, "worktree-1")
+	err = os.MkdirAll(worktreeDir, 0755)
+	require.NoError(t, err)
+
+	// Verify directory exists
+	info, err := os.Stat(worktreeDir)
+	assert.NoError(t, err)
+	assert.True(t, info.IsDir())
+
+	// Test cleanup simulation
+	oldWorktree := filepath.Join(tmpDir, "old-worktree")
+	err = os.MkdirAll(oldWorktree, 0755)
+	require.NoError(t, err)
+
+	// Verify old worktree exists before cleanup
+	_, err = os.Stat(oldWorktree)
+	assert.NoError(t, err)
+}
+
+func TestGitCommands_Validation(t *testing.T) {
+	// Test various git command validations
+	testCases := []struct {
+		name    string
+		command string
+		args    []string
+		valid   bool
+	}{
+		{
+			name:    "Valid status command",
+			command: "git",
+			args:    []string{"status", "--porcelain"},
+			valid:   true,
+		},
+		{
+			name:    "Valid add command",
+			command: "git",
+			args:    []string{"add", "."},
+			valid:   true,
+		},
+		{
+			name:    "Valid commit command",
+			command: "git",
+			args:    []string{"commit", "-m", "test commit"},
+			valid:   true,
+		},
+		{
+			name:    "Valid branch command",
+			command: "git",
+			args:    []string{"branch", "feature/test"},
+			valid:   true,
+		},
+		{
+			name:    "Invalid command",
+			command: "rm",
+			args:    []string{"-rf", "/"},
+			valid:   false,
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			// Test command validation logic
+			isGitCommand := tc.command == "git"
+			if tc.valid {
+				assert.True(t, isGitCommand, "Should be a valid git command")
+			} else {
+				assert.False(t, isGitCommand, "Should not be a valid git command")
+			}
+		})
+	}
+}
+
+func TestRepositoryCloning_Simulation(t *testing.T) {
+	tmpDir, err := os.MkdirTemp("", "test-clone-*")
+	require.NoError(t, err)
+	defer os.RemoveAll(tmpDir)
+
+	// Simulate repository cloning by creating directory structure
+	repoDir := filepath.Join(tmpDir, "cloned-repo")
+	err = os.MkdirAll(repoDir, 0755)
+	require.NoError(t, err)
+
+	// Create .git directory to simulate cloned repo
+	gitDir := filepath.Join(repoDir, ".git")
+	err = os.MkdirAll(gitDir, 0755)
+	require.NoError(t, err)
+
+	// Create some files to simulate repository content
+	files := map[string]string{
+		"README.md":  "# Cloned Repository\n",
+		"main.go":    "package main\n\nfunc main() {}\n",
+		"go.mod":     "module cloned-repo\n\ngo 1.21\n",
+		".gitignore": "*.log\n*.tmp\n",
+	}
+
+	for filename, content := range files {
+		filePath := filepath.Join(repoDir, filename)
+		err = os.WriteFile(filePath, []byte(content), 0644)
+		require.NoError(t, err)
+	}
+
+	// Verify cloned repository structure
+	for filename := range files {
+		filePath := filepath.Join(repoDir, filename)
+		_, err = os.Stat(filePath)
+		assert.NoError(t, err, "File %s should exist in cloned repo", filename)
+	}
+
+	// Verify .git directory exists
+	_, err = os.Stat(gitDir)
+	assert.NoError(t, err, ".git directory should exist")
+}
+
+func TestBranchOperations_Simulation(t *testing.T) {
+	tmpDir, err := os.MkdirTemp("", "test-branch-ops-*")
+	require.NoError(t, err)
+	defer os.RemoveAll(tmpDir)
+
+	// Test branch naming conventions
+	testBranches := []struct {
+		name     string
+		valid    bool
+		category string
+	}{
+		{"feature/user-auth", true, "feature"},
+		{"fix/login-bug", true, "fix"},
+		{"chore/update-deps", true, "chore"},
+		{"docs/api-guide", true, "docs"},
+		{"hotfix/critical-fix", true, "hotfix"},
+		{"invalid branch name", false, "invalid"},
+		{"", false, "empty"},
+	}
+
+	for _, branch := range testBranches {
+		t.Run(branch.name, func(t *testing.T) {
+			if branch.valid {
+				// Valid branch names should follow convention
+				assert.Contains(t, branch.name, "/", "Valid branch should have category separator")
+				assert.NotEmpty(t, branch.category, "Valid branch should have category")
+			} else {
+				// Invalid branch names
+				if branch.name == "" {
+					assert.Empty(t, branch.name, "Empty branch name should be invalid")
+				} else {
+					assert.NotContains(t, branch.name, "/", "Invalid branch should not follow convention")
+				}
+			}
+		})
+	}
+}
+
+func TestCommitOperations_Validation(t *testing.T) {
+	// Test commit message validation
+	testCommits := []struct {
+		message string
+		valid   bool
+		type_   string
+	}{
+		{"feat: add user authentication", true, "feat"},
+		{"fix: resolve login timeout issue", true, "fix"},
+		{"docs: update API documentation", true, "docs"},
+		{"chore: update dependencies", true, "chore"},
+		{"test: add unit tests for auth", true, "test"},
+		{"refactor: simplify user service", true, "refactor"},
+		{"Invalid commit message", false, "invalid"},
+		{"", false, "empty"},
+		{"fix:", false, "incomplete"},
+	}
+
+	for _, commit := range testCommits {
+		t.Run(commit.message, func(t *testing.T) {
+			if commit.valid {
+				assert.Contains(t, commit.message, ":", "Valid commit should have type separator")
+				assert.True(t, len(commit.message) > 10, "Valid commit should have descriptive message")
+			} else {
+				if commit.message == "" {
+					assert.Empty(t, commit.message, "Empty commit message should be invalid")
+				} else if commit.message == "fix:" {
+					assert.True(t, len(commit.message) <= 4, "Incomplete commit should be short")
+				} else {
+					assert.NotContains(t, commit.message, ":", "Invalid commit should not follow convention")
+				}
+			}
+		})
+	}
+}

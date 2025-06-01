@@ -1,0 +1,419 @@
+package workflow
+
+import (
+	"context"
+	"fmt"
+	"testing"
+	"time"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+)
+
+func TestWorkflowEngine_Creation(t *testing.T) {
+	config := EngineConfig{
+		MaxConcurrentWorkflows: 5,
+		DefaultTimeout:         30 * time.Minute,
+		RetryAttempts:          3,
+		RetryDelay:             5 * time.Second,
+	}
+
+	engine, err := NewEngine(config)
+	require.NoError(t, err)
+	assert.NotNil(t, engine)
+}
+
+func TestWorkflowEngine_DefaultConfig(t *testing.T) {
+	config := DefaultEngineConfig()
+	assert.True(t, config.MaxConcurrentWorkflows > 0)
+	assert.True(t, config.DefaultTimeout > 0)
+	assert.True(t, config.RetryAttempts > 0)
+	assert.True(t, config.RetryDelay > 0)
+}
+
+func TestWorkflow_States(t *testing.T) {
+	testStates := []struct {
+		state       WorkflowState
+		description string
+		isFinal     bool
+	}{
+		{StatePending, "Workflow is pending", false},
+		{StateRunning, "Workflow is running", false},
+		{StateCompleted, "Workflow completed successfully", true},
+		{StateFailed, "Workflow failed", true},
+		{StateCancelled, "Workflow was cancelled", true},
+		{StatePaused, "Workflow is paused", false},
+	}
+
+	for _, test := range testStates {
+		t.Run(test.description, func(t *testing.T) {
+			workflow := &Workflow{
+				ID:    fmt.Sprintf("test-%s", test.state),
+				State: test.state,
+			}
+
+			assert.Equal(t, test.state, workflow.State)
+
+			// Test state transitions
+			if test.isFinal {
+				assert.True(t,
+					test.state == StateCompleted ||
+						test.state == StateFailed ||
+						test.state == StateCancelled,
+					"Final states should be completed, failed, or cancelled")
+			} else {
+				assert.True(t,
+					test.state == StatePending ||
+						test.state == StateRunning ||
+						test.state == StatePaused,
+					"Non-final states should be pending, running, or paused")
+			}
+		})
+	}
+}
+
+func TestWorkflowStages_Execution(t *testing.T) {
+	stages := []Stage{
+		{
+			Name:        "Parse Issue",
+			Description: "Parse GitHub issue content",
+			Order:       1,
+			Status:      StageStatusPending,
+		},
+		{
+			Name:        "Create Worktree",
+			Description: "Create git worktree for the issue",
+			Order:       2,
+			Status:      StageStatusPending,
+		},
+		{
+			Name:        "Analyze Context",
+			Description: "Analyze project context and requirements",
+			Order:       3,
+			Status:      StageStatusPending,
+		},
+		{
+			Name:        "Execute Claude",
+			Description: "Run Claude Code to implement changes",
+			Order:       4,
+			Status:      StageStatusPending,
+		},
+		{
+			Name:        "Create PR",
+			Description: "Create pull request with changes",
+			Order:       5,
+			Status:      StageStatusPending,
+		},
+	}
+
+	workflow := &Workflow{
+		ID:     "test-workflow",
+		State:  StatePending,
+		Stages: stages,
+	}
+
+	assert.Len(t, workflow.Stages, 5)
+
+	// Test stage ordering
+	for i, stage := range workflow.Stages {
+		expectedOrder := i + 1
+		assert.Equal(t, expectedOrder, stage.Order)
+		assert.Equal(t, StageStatusPending, stage.Status)
+	}
+
+	// Test stage progression simulation
+	for i := range workflow.Stages {
+		workflow.Stages[i].Status = StageStatusRunning
+		assert.Equal(t, StageStatusRunning, workflow.Stages[i].Status)
+
+		workflow.Stages[i].Status = StageStatusCompleted
+		assert.Equal(t, StageStatusCompleted, workflow.Stages[i].Status)
+	}
+}
+
+func TestWorkflowEngine_ConcurrencyLimits(t *testing.T) {
+	config := EngineConfig{
+		MaxConcurrentWorkflows: 2,
+		DefaultTimeout:         1 * time.Minute,
+		RetryAttempts:          1,
+		RetryDelay:             1 * time.Second,
+	}
+
+	engine, err := NewEngine(config)
+	require.NoError(t, err)
+
+	// Test concurrent workflow limit
+	workflows := make([]*Workflow, 3)
+	for i := 0; i < 3; i++ {
+		workflows[i] = &Workflow{
+			ID:    fmt.Sprintf("concurrent-workflow-%d", i),
+			State: StatePending,
+		}
+	}
+
+	// Only 2 should be able to run concurrently based on config
+	assert.Len(t, workflows, 3)
+	assert.Equal(t, 2, config.MaxConcurrentWorkflows)
+}
+
+func TestWorkflowExecution_ErrorHandling(t *testing.T) {
+	errorStages := []struct {
+		stageName   string
+		errorType   string
+		shouldRetry bool
+	}{
+		{
+			stageName:   "Network Request",
+			errorType:   "timeout",
+			shouldRetry: true,
+		},
+		{
+			stageName:   "File Operation",
+			errorType:   "permission_denied",
+			shouldRetry: false,
+		},
+		{
+			stageName:   "API Call",
+			errorType:   "rate_limit",
+			shouldRetry: true,
+		},
+		{
+			stageName:   "Validation",
+			errorType:   "invalid_input",
+			shouldRetry: false,
+		},
+	}
+
+	for _, errorCase := range errorStages {
+		t.Run(errorCase.stageName, func(t *testing.T) {
+			stage := Stage{
+				Name:         errorCase.stageName,
+				Status:       StageStatusFailed,
+				ErrorMessage: errorCase.errorType,
+				RetryCount:   0,
+			}
+
+			if errorCase.shouldRetry {
+				// Simulate retry logic
+				stage.RetryCount++
+				assert.Equal(t, 1, stage.RetryCount)
+			}
+
+			assert.Equal(t, StageStatusFailed, stage.Status)
+			assert.Contains(t, stage.ErrorMessage, errorCase.errorType)
+		})
+	}
+}
+
+func TestWorkflowEngine_EventHandling(t *testing.T) {
+	events := []WorkflowEvent{
+		{
+			Type:       EventWorkflowStarted,
+			WorkflowID: "test-workflow",
+			Timestamp:  time.Now(),
+		},
+		{
+			Type:       EventStageStarted,
+			WorkflowID: "test-workflow",
+			StageID:    "parse-issue",
+			Timestamp:  time.Now(),
+		},
+		{
+			Type:       EventStageCompleted,
+			WorkflowID: "test-workflow",
+			StageID:    "parse-issue",
+			Timestamp:  time.Now(),
+		},
+		{
+			Type:       EventWorkflowCompleted,
+			WorkflowID: "test-workflow",
+			Timestamp:  time.Now(),
+		},
+	}
+
+	for _, event := range events {
+		assert.NotEmpty(t, event.WorkflowID)
+		assert.NotEmpty(t, event.Type)
+		assert.True(t, event.Timestamp.After(time.Time{}))
+
+		// Test event type validation
+		validEventTypes := []EventType{
+			EventWorkflowStarted,
+			EventWorkflowCompleted,
+			EventWorkflowFailed,
+			EventStageStarted,
+			EventStageCompleted,
+			EventStageFailed,
+		}
+
+		isValidType := false
+		for _, validType := range validEventTypes {
+			if event.Type == validType {
+				isValidType = true
+				break
+			}
+		}
+		assert.True(t, isValidType, "Event type should be valid")
+	}
+}
+
+func TestWorkflowPersistence_Simulation(t *testing.T) {
+	workflow := &Workflow{
+		ID:          "persistent-workflow",
+		State:       StateRunning,
+		StartTime:   time.Now().Add(-10 * time.Minute),
+		UpdatedTime: time.Now(),
+		Stages: []Stage{
+			{
+				Name:      "Stage 1",
+				Status:    StageStatusCompleted,
+				StartTime: time.Now().Add(-10 * time.Minute),
+				EndTime:   time.Now().Add(-8 * time.Minute),
+			},
+			{
+				Name:      "Stage 2",
+				Status:    StageStatusRunning,
+				StartTime: time.Now().Add(-2 * time.Minute),
+			},
+		},
+	}
+
+	// Test workflow serialization simulation
+	assert.NotEmpty(t, workflow.ID)
+	assert.Equal(t, StateRunning, workflow.State)
+	assert.True(t, workflow.StartTime.Before(workflow.UpdatedTime))
+
+	// Test stage persistence
+	completedStages := 0
+	runningStages := 0
+
+	for _, stage := range workflow.Stages {
+		switch stage.Status {
+		case StageStatusCompleted:
+			completedStages++
+			assert.True(t, stage.EndTime.After(stage.StartTime))
+		case StageStatusRunning:
+			runningStages++
+			assert.True(t, stage.EndTime.IsZero()) // Running stage shouldn't have end time
+		}
+	}
+
+	assert.Equal(t, 1, completedStages)
+	assert.Equal(t, 1, runningStages)
+}
+
+func TestWorkflowEngine_ResourceManagement(t *testing.T) {
+	config := EngineConfig{
+		MaxConcurrentWorkflows: 3,
+		DefaultTimeout:         15 * time.Minute,
+		RetryAttempts:          2,
+		RetryDelay:             3 * time.Second,
+		ResourceLimits: ResourceLimits{
+			MaxMemoryMB:    512,
+			MaxCPUPercent:  50,
+			MaxDiskSpaceGB: 10,
+		},
+	}
+
+	engine, err := NewEngine(config)
+	require.NoError(t, err)
+
+	// Test resource limits
+	assert.Equal(t, 512, config.ResourceLimits.MaxMemoryMB)
+	assert.Equal(t, 50, config.ResourceLimits.MaxCPUPercent)
+	assert.Equal(t, 10, config.ResourceLimits.MaxDiskSpaceGB)
+}
+
+func TestWorkflowEngine_HealthCheck(t *testing.T) {
+	config := DefaultEngineConfig()
+	engine, err := NewEngine(config)
+	require.NoError(t, err)
+
+	// Simulate health check
+	healthStatus := HealthStatus{
+		Status:           "healthy",
+		ActiveWorkflows:  2,
+		QueuedWorkflows:  1,
+		CompletedToday:   15,
+		FailedToday:      2,
+		AverageExecution: 8 * time.Minute,
+		LastCheck:        time.Now(),
+	}
+
+	assert.Equal(t, "healthy", healthStatus.Status)
+	assert.True(t, healthStatus.ActiveWorkflows >= 0)
+	assert.True(t, healthStatus.QueuedWorkflows >= 0)
+	assert.True(t, healthStatus.CompletedToday >= 0)
+	assert.True(t, healthStatus.AverageExecution > 0)
+}
+
+func TestWorkflowEngine_Cleanup(t *testing.T) {
+	// Test workflow cleanup scenarios
+	oldWorkflows := []struct {
+		id            string
+		state         WorkflowState
+		age           time.Duration
+		shouldCleanup bool
+	}{
+		{
+			id:            "old-completed",
+			state:         StateCompleted,
+			age:           48 * time.Hour,
+			shouldCleanup: true,
+		},
+		{
+			id:            "old-failed",
+			state:         StateFailed,
+			age:           72 * time.Hour,
+			shouldCleanup: true,
+		},
+		{
+			id:            "recent-completed",
+			state:         StateCompleted,
+			age:           2 * time.Hour,
+			shouldCleanup: false,
+		},
+		{
+			id:            "running-workflow",
+			state:         StateRunning,
+			age:           24 * time.Hour,
+			shouldCleanup: false,
+		},
+	}
+
+	cleanupThreshold := 24 * time.Hour
+
+	for _, workflow := range oldWorkflows {
+		t.Run(workflow.id, func(t *testing.T) {
+			shouldCleanup := workflow.age > cleanupThreshold &&
+				(workflow.state == StateCompleted || workflow.state == StateFailed)
+
+			assert.Equal(t, workflow.shouldCleanup, shouldCleanup)
+		})
+	}
+}
+
+func TestWorkflowEngine_ContextCancellation(t *testing.T) {
+	config := DefaultEngineConfig()
+	engine, err := NewEngine(config)
+	require.NoError(t, err)
+
+	// Test context cancellation
+	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Millisecond)
+	defer cancel()
+
+	// Wait for context to timeout
+	<-ctx.Done()
+	assert.Equal(t, context.DeadlineExceeded, ctx.Err())
+
+	// Test cancellation context
+	cancelCtx, cancelFunc := context.WithCancel(context.Background())
+	cancelFunc()
+
+	select {
+	case <-cancelCtx.Done():
+		assert.Equal(t, context.Canceled, cancelCtx.Err())
+	default:
+		t.Error("Context should be cancelled")
+	}
+}

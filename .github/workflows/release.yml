@@ -1,0 +1,238 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version tag (e.g., v1.0.0)'
+        required: true
+        type: string
+
+permissions:
+  contents: write
+  packages: write
+
+env:
+  GO_VERSION: '1.21'
+
+jobs:
+  test:
+    name: Test Before Release
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v4
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+
+      - name: Run tests
+        run: make ci-test
+
+      - name: Run lints
+        run: make ci-lint
+
+  build:
+    name: Build Release Artifacts
+    runs-on: ubuntu-latest
+    needs: test
+    strategy:
+      matrix:
+        include:
+          - goos: linux
+            goarch: amd64
+          - goos: linux
+            goarch: arm64
+          - goos: darwin
+            goarch: amd64
+          - goos: darwin
+            goarch: arm64
+          - goos: windows
+            goarch: amd64
+          - goos: windows
+            goarch: arm64
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Go
+        uses: actions/setup-go@v4
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+
+      - name: Get version
+        id: version
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "version=${{ github.event.inputs.version }}" >> $GITHUB_OUTPUT
+          else
+            echo "version=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Build binary
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          VERSION: ${{ steps.version.outputs.version }}
+          CGO_ENABLED: 0
+        run: |
+          BINARY_NAME="ccagents"
+          if [ "$GOOS" = "windows" ]; then
+            BINARY_NAME="${BINARY_NAME}.exe"
+          fi
+          
+          mkdir -p dist
+          
+          go build \
+            -ldflags "-X main.version=$VERSION -X main.commit=${{ github.sha }} -X main.buildDate=$(date -u +%Y-%m-%dT%H:%M:%SZ) -s -w" \
+            -o "dist/ccagents-$GOOS-$GOARCH${BINARY_NAME##ccagents}" \
+            ./cmd/ccagents
+
+      - name: Create archive
+        run: |
+          cd dist
+          BINARY_NAME="ccagents-${{ matrix.goos }}-${{ matrix.goarch }}"
+          if [ "${{ matrix.goos }}" = "windows" ]; then
+            BINARY_NAME="${BINARY_NAME}.exe"
+            zip "${BINARY_NAME%.*}.zip" "$BINARY_NAME"
+            echo "ARCHIVE=${BINARY_NAME%.*}.zip" >> $GITHUB_ENV
+          else
+            tar -czf "${BINARY_NAME}.tar.gz" "$BINARY_NAME"
+            echo "ARCHIVE=${BINARY_NAME}.tar.gz" >> $GITHUB_ENV
+          fi
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v3
+        with:
+          name: ccagents-${{ matrix.goos }}-${{ matrix.goarch }}
+          path: dist/${{ env.ARCHIVE }}
+          retention-days: 5
+
+  release:
+    name: Create Release
+    needs: build
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Get version
+        id: version
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "version=${{ github.event.inputs.version }}" >> $GITHUB_OUTPUT
+          else
+            echo "version=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v3
+        with:
+          path: dist/
+
+      - name: Organize artifacts
+        run: |
+          mkdir -p release/
+          find dist/ -name "*.tar.gz" -o -name "*.zip" | while read file; do
+            cp "$file" release/
+          done
+          ls -la release/
+
+      - name: Generate checksums
+        run: |
+          cd release/
+          sha256sum *.tar.gz *.zip > checksums.txt
+          cat checksums.txt
+
+      - name: Generate changelog
+        id: changelog
+        run: |
+          PREVIOUS_TAG=$(git describe --tags --abbrev=0 HEAD^ 2>/dev/null || echo "")
+          if [ -n "$PREVIOUS_TAG" ]; then
+            echo "## Changes since $PREVIOUS_TAG" > changelog.md
+            echo "" >> changelog.md
+            git log --pretty=format:"- %s" $PREVIOUS_TAG..HEAD >> changelog.md
+          else
+            echo "## Initial Release" > changelog.md
+            echo "" >> changelog.md
+            echo "First release of ccAgents - AI-powered GitHub issue-to-PR automation tool." >> changelog.md
+          fi
+          
+          echo "" >> changelog.md
+          echo "## Installation" >> changelog.md
+          echo "" >> changelog.md
+          echo "### Download Binary" >> changelog.md
+          echo "Download the appropriate binary for your platform from the assets below." >> changelog.md
+          echo "" >> changelog.md
+          echo "### macOS (Homebrew)" >> changelog.md
+          echo '```bash' >> changelog.md
+          echo "brew install fumiya-kume/tap/ccagents" >> changelog.md
+          echo '```' >> changelog.md
+          echo "" >> changelog.md
+          echo "### Linux/macOS (Install Script)" >> changelog.md
+          echo '```bash' >> changelog.md
+          echo "curl -sSL https://raw.githubusercontent.com/fumiya-kume/cca/main/install.sh | bash" >> changelog.md
+          echo '```' >> changelog.md
+          echo "" >> changelog.md
+          echo "### Manual Installation" >> changelog.md
+          echo "1. Download the binary for your platform" >> changelog.md
+          echo "2. Extract the archive" >> changelog.md
+          echo "3. Move the binary to a directory in your PATH" >> changelog.md
+          echo "4. Make it executable: \`chmod +x ccagents\`" >> changelog.md
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: ${{ steps.version.outputs.version }}
+          name: ccAgents ${{ steps.version.outputs.version }}
+          body_path: changelog.md
+          files: |
+            release/*
+          draft: false
+          prerelease: ${{ contains(steps.version.outputs.version, '-') }}
+          generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  notify:
+    name: Notify Release
+    needs: release
+    runs-on: ubuntu-latest
+    if: always() && (startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch')
+    
+    steps:
+      - name: Get version
+        id: version
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "version=${{ github.event.inputs.version }}" >> $GITHUB_OUTPUT
+          else
+            echo "version=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Notify success
+        if: needs.release.result == 'success'
+        run: |
+          echo "✅ Release ${{ steps.version.outputs.version }} created successfully!"
+          echo "📦 Download: https://github.com/fumiya-kume/cca/releases/tag/${{ steps.version.outputs.version }}"
+
+      - name: Notify failure
+        if: needs.release.result == 'failure'
+        run: |
+          echo "❌ Release ${{ steps.version.outputs.version }} failed!"
+          exit 1
