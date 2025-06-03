@@ -1,4 +1,4 @@
-// Package internal contains the core types and logic for ccAgents.
+// Package internal contains the core types and logic for cca.
 package internal
 
 // Issue represents a GitHub issue fetched via the GitHub CLI
