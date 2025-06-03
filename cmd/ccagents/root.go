@@ -68,6 +68,11 @@ func initConfig() {
 	if debug {
 		cfg.Logging.Level = "debug"
 		cfg.UI.VerboseOutput = true
+		// Enable verbose Claude debugging to show full prompts
+		if err := os.Setenv("CCAGENTS_VERBOSE_DEBUG", "true"); err != nil {
+			// Continue if setting env var fails - debug mode is not critical
+			fmt.Printf("Warning: Failed to set verbose debug environment variable: %v\n", err)
+		}
 	}
 
 	// Apply other flag overrides

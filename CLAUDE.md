@@ -145,6 +145,28 @@ Uses YAML configuration files (`.ccagents.yaml`) with sections for:
 - `workflow` - Automation workflow settings
 - `ui` - Terminal UI preferences
 
+### Debug Mode
+
+To enable enhanced debugging with full Claude prompt display:
+
+```bash
+# Option 1: Use the --debug flag (automatically enables verbose Claude debugging)
+./bin/ccagents --debug [command]
+
+# Option 2: Manually set the environment variable
+export CCAGENTS_VERBOSE_DEBUG=true
+./bin/ccagents [command]
+```
+
+When debug mode is enabled, the application will display:
+- Full Claude prompt content with clear separator lines
+- Prompt character count
+- Command execution details
+- Working directory and execution context
+- Additional workflow debugging information
+
+**Note**: The `--debug` flag automatically enables `CCAGENTS_VERBOSE_DEBUG` for comprehensive debugging.
+
 ## Common Development Tasks
 
 When working on new features:

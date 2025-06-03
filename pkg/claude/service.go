@@ -438,7 +438,7 @@ func (s *Service) executeClaudeNonInteractive(ctx context.Context, prompt, worki
 	fmt.Printf("🔍 Debug: Executing Claude command: %s\n", claudeCommand)
 	
 	// Add timeout to prevent hanging
-	timeoutCtx, cancel := context.WithTimeout(cmdCtx, 30*time.Second)
+	timeoutCtx, cancel := context.WithTimeout(cmdCtx, 45*time.Second)
 	defer cancel()
 	
 	// Build command: claude -p "prompt"
@@ -462,6 +462,8 @@ func (s *Service) executeClaudeNonInteractive(ctx context.Context, prompt, worki
 	cmd.Env = append(os.Environ(), 
 		"CLAUDE_TIMEOUT=30s",
 		"CLAUDE_OUTPUT_FORMAT=text",
+		"CLAUDE_FAST_MODE=true",
+		"CLAUDE_MAX_TOKENS=2048",
 	)
 	
 	// Execute command and capture output
@@ -481,14 +483,19 @@ func (s *Service) executeClaudeNonInteractive(ctx context.Context, prompt, worki
 	
 	// Show prompt content if verbose debug is enabled
 	if os.Getenv("CCAGENTS_VERBOSE_DEBUG") == "true" {
-		fmt.Printf("🔍 Debug: Prompt content: %q\n", prompt)
+		separator := "=" + strings.Repeat("=", 78)
+		fmt.Printf("🔍 Debug: Full Claude Prompt:\n")
+		fmt.Printf("%s\n", separator)
+		fmt.Printf("%s\n", prompt)
+		fmt.Printf("%s\n", separator)
+		fmt.Printf("🔍 Debug: Prompt length: %d characters\n", len(prompt))
 	}
 	output, err := cmd.Output()
 	if err != nil {
 		// If Claude execution fails, provide helpful error context
 		if ctx.Err() == context.DeadlineExceeded {
-			fmt.Printf("❌ Claude Error: Command timed out after 30 seconds\n")
-			return "", fmt.Errorf("claude command timed out after 30 seconds")
+			fmt.Printf("❌ Claude Error: Command timed out after 45 seconds\n")
+			return "", fmt.Errorf("claude command timed out after 45 seconds")
 		}
 		if exitErr, ok := err.(*exec.ExitError); ok {
 			stderr := string(exitErr.Stderr)
