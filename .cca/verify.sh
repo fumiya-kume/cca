@@ -1,8 +1,8 @@
 #!/bin/bash
-# Add your build, test, and lint commands here
-# Examples:
-# deno task build
-# deno test
+set -e
 
-echo "No verification script configured - skipping checks"
-exit 0
+# Run tests with necessary permissions
+deno test --allow-all
+
+# Run linter
+deno lint
