@@ -20,6 +20,24 @@ export class Processor {
     return this.claude;
   }
 
+  private parseClaudeResponse(text: string): CodeChanges {
+    let cleaned = text.trim();
+    const fence = cleaned.match(/```(?:json)?\n([\s\S]*?)\n```/);
+    if (fence) {
+      cleaned = fence[1];
+    }
+    try {
+      return JSON.parse(cleaned);
+    } catch {
+      const first = cleaned.indexOf("{");
+      const last = cleaned.lastIndexOf("}");
+      if (first !== -1 && last !== -1) {
+        return JSON.parse(cleaned.slice(first, last + 1));
+      }
+      throw new SyntaxError("Invalid JSON from Claude");
+    }
+  }
+
   async processIssue(issueURL: string): Promise<void> {
     console.log("\uD83D\uDD0D Fetching issue...");
     const issue = await this.fetchIssue(issueURL);
@@ -102,7 +120,7 @@ export class Processor {
       throw new Error(res.error?.result ?? "claude failed");
     }
     console.log("Claude response received");
-    return JSON.parse(res.message.result);
+    return this.parseClaudeResponse(res.message.result);
   }
 
   private async applyChanges(changes: CodeChanges): Promise<void> {
@@ -179,6 +197,6 @@ export class Processor {
       throw new Error(res.error?.result ?? "claude failed");
     }
     console.log("Claude returned fixed changes");
-    return JSON.parse(res.message.result);
+    return this.parseClaudeResponse(res.message.result);
   }
 }

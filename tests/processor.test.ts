@@ -427,3 +427,29 @@ Deno.test("processIssue throws after max retries", async () => {
   setGitHelpers({ gitOperations, createPR });
   assert(threw);
 });
+
+Deno.test("parseClaudeResponse handles fenced block", () => {
+  const p = new Processor();
+  const ch: CodeChanges = {
+    files: { "a.txt": "hi" },
+    new_files: [],
+    deleted_files: [],
+    summary: "s",
+  };
+  const text = "```json\n" + JSON.stringify(ch) + "\n```";
+  const res = (p as any).parseClaudeResponse(text);
+  assertEquals(res.files["a.txt"], "hi");
+});
+
+Deno.test("parseClaudeResponse extracts JSON substring", () => {
+  const p = new Processor();
+  const ch: CodeChanges = {
+    files: {},
+    new_files: [],
+    deleted_files: [],
+    summary: "done",
+  };
+  const text = "random text " + JSON.stringify(ch) + " more";
+  const res = (p as any).parseClaudeResponse(text);
+  assertEquals(res.summary, "done");
+});
