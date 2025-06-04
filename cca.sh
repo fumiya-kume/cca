@@ -69,6 +69,7 @@ repo=$(echo "$ISSUE_URL" | awk -F/ '{print $4"/"$5}')
 log "Fetched issue #$number: $title"
 
 prompt_file=$(mktemp)
+log "Created prompt file $prompt_file"
 cat >"$prompt_file" <<EOF2
 Implement a solution for this GitHub issue:
 
@@ -92,6 +93,7 @@ Format as JSON:
 }
 EOF2
 
+log "Generating code changes with Claude..."
 
 changes_json=$(claude_chat "$prompt_file" "no-p")
 rm "$prompt_file"
@@ -105,6 +107,7 @@ mkdir -p "$root_dir/.cca/worktrees"
 git worktree add "$work_dir" -b "$branch"
 log "Created worktree $work_dir on branch $branch"
 pushd "$work_dir" >/dev/null
+log "Switched to worktree $work_dir"
 
 max_retries=3
 attempt=1
