@@ -1,9 +1,9 @@
-// deno-lint-ignore-file no-explicit-any require-await
+// deno-lint-ignore-file no-explicit-any
 import {
   assert,
   assertEquals,
 } from "https://deno.land/std@0.204.0/testing/asserts.ts";
-import { generateRandomString, gitOperations, createPR } from "../src/git.ts";
+import { generateRandomString, gitOperations } from "../src/git.ts";
 import { Issue } from "../src/types.ts";
 
 // utility to stub Deno.Command during tests
