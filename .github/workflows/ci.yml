@@ -20,5 +20,7 @@ jobs:
         run: deno lint src/main.ts src/processor.ts src/types.ts
       - name: Test
         run: deno test --allow-all --coverage=cov
+        env:
+          DENO_TLS_CA_STORE: system
       - name: Generate coverage report
         run: deno coverage cov --lcov > coverage.lcov

@@ -49,6 +49,12 @@ Lint with:
 deno lint src/main.ts src/processor.ts src/types.ts
 ```
 
+Run the tests with coverage:
+
+```bash
+DENO_TLS_CA_STORE=system deno test --allow-all --coverage=cov
+```
+
 ## Continuous Integration
 
 The repository includes a GitHub Actions workflow that runs formatting, linting,
