@@ -3,14 +3,14 @@ set -euo pipefail
 
 claude_chat() {
   local prompt_file="$1"
+  local mode="${2:-with-p}"
   local prompt
   prompt=$(cat "$prompt_file")
-  curl -sS https://api.anthropic.com/v1/messages \
-    -H "x-api-key: $ANTHROPIC_API_KEY" \
-    -H "content-type: application/json" \
-    -H "anthropic-version: 2023-06-01" \
-    -d "$(jq -n --arg prompt "$prompt" '{model:"claude-3-sonnet-20240229",max_tokens:4096,messages:[{role:"user",content:$prompt}]}' )" |
-    jq -r '.content[0].text'
+  if [ "$mode" = "with-p" ]; then
+    claude -p "$prompt"
+  else
+    claude "$prompt"
+  fi
 }
 
 apply_changes() {
@@ -48,8 +48,8 @@ if ! command -v jq >/dev/null; then
   echo "jq command not found" >&2
   exit 1
 fi
-if ! command -v curl >/dev/null; then
-  echo "curl command not found" >&2
+if ! command -v claude >/dev/null; then
+  echo "claude command not found" >&2
   exit 1
 fi
 
@@ -91,7 +91,7 @@ Format as JSON:
 EOF2
 
 
-changes_json=$(claude_chat "$prompt_file")
+changes_json=$(claude_chat "$prompt_file" "no-p")
 rm "$prompt_file"
 
 rand=$(tr -dc 'a-z0-9' </dev/urandom | head -c 6)
@@ -148,7 +148,7 @@ Format as JSON with the same structure as before:
   "summary": "..."
 }
 EOF3
-  changes_json=$(claude_chat "$fix_prompt_file")
+  changes_json=$(claude_chat "$fix_prompt_file" "with-p")
   rm "$fix_prompt_file"
   attempt=$((attempt + 1))
 done
