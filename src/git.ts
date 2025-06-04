@@ -3,19 +3,23 @@ import { Issue } from "./types.ts";
 export async function gitOperations(issue: Issue): Promise<void> {
   const branchName = `cca/issue-${issue.number}`;
 
+  console.log(`git checkout -b ${branchName}`);
   let status = await new Deno.Command("git", {
     args: ["checkout", "-b", branchName],
   }).spawn().status;
   if (status.code !== 0) throw new Error("failed to create branch");
 
+  console.log("git add .");
   status = await new Deno.Command("git", { args: ["add", "."] }).spawn().status;
   if (status.code !== 0) throw new Error("failed to add files");
 
   const commitMsg = `Implement: ${issue.title}`;
+  console.log(`git commit -m \"${commitMsg}\"`);
   status = await new Deno.Command("git", { args: ["commit", "-m", commitMsg] })
     .spawn().status;
   if (status.code !== 0) throw new Error("failed to commit");
 
+  console.log(`git push origin ${branchName}`);
   status = await new Deno.Command("git", {
     args: ["push", "origin", branchName],
   }).spawn().status;
@@ -25,6 +29,8 @@ export async function gitOperations(issue: Issue): Promise<void> {
 export async function createPR(issue: Issue): Promise<string> {
   const title = `Fix: ${issue.title}`;
   const body = `Resolves: ${issue.url}`;
+
+  console.log('gh pr create --draft --title "' + title + '"');
 
   const cmd = new Deno.Command("gh", {
     args: ["pr", "create", "--draft", "--title", title, "--body", body],
@@ -37,6 +43,8 @@ export async function createPR(issue: Issue): Promise<string> {
   if (code !== 0) {
     throw new Error(`failed to create PR: ${output}`);
   }
+
+  console.log("Pull request created: " + output.trim());
 
   const lines = output.trim().split("\n");
   const lastLine = lines[lines.length - 1];

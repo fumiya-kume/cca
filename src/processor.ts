@@ -12,8 +12,10 @@ export class Processor {
 
   private async getClaude(): Promise<ClaudeCode> {
     if (!this.claude) {
+      console.log("\uD83E\uDD16 Loading Claude Code SDK...");
       const mod = await import("npm:claude-code-js");
       this.claude = new mod.ClaudeCode();
+      console.log("\u2705 Claude Code SDK loaded");
     }
     return this.claude;
   }
@@ -24,6 +26,7 @@ export class Processor {
     console.log(`\u2705 Issue fetched: "${issue.title}"\n`);
 
     console.log("\uD83E\uDD16 Generating code with Claude...");
+    console.log(`Using issue data: ${JSON.stringify(issue)}`);
     let changes = await this.generateCode(issue);
     console.log(
       `\u2705 Code generated: ${
@@ -33,6 +36,7 @@ export class Processor {
 
     const maxRetries = 3;
     for (let attempt = 1; attempt <= maxRetries; attempt++) {
+      console.log(`\uD83D\uDD0C Applying changes (attempt ${attempt})...`);
       await this.applyChanges(changes);
 
       console.log("\uD83D\uDD27 Running verification (.cca/verify.sh)...");
@@ -91,17 +95,20 @@ export class Processor {
   private async generateCode(issue: Issue): Promise<CodeChanges> {
     const prompt =
       `Implement a solution for this GitHub issue:\n\nIssue: ${issue.title}\nDescription: ${issue.body}\nRepository: ${issue.repository}\n\nAnalyze the issue and provide a complete implementation including:\n1. All necessary code changes\n2. Tests for the implementation\n3. Any documentation updates needed\n\nReturn the implementation as file paths and their complete content.\n\nFormat as JSON:\n{\n  "files": {\n    "path/to/file.ts": "complete file content..."\n  },\n  "new_files": ["list", "of", "new", "files"],\n  "deleted_files": ["list", "of", "deleted", "files"],\n  "summary": "Brief description of changes made"\n}`;
+    console.log("Prompt sent to Claude:\n" + prompt);
     const claude = await this.getClaude();
     const res = await claude.chat({ prompt });
     if (!res.success || !res.message?.result) {
       throw new Error(res.error?.result ?? "claude failed");
     }
+    console.log("Claude response received");
     return JSON.parse(res.message.result);
   }
 
   private async applyChanges(changes: CodeChanges): Promise<void> {
     for (const path of changes.deleted_files) {
       try {
+        console.log(`Deleting ${path}`);
         await Deno.remove(path);
       } catch (err) {
         if (!(err instanceof Deno.errors.NotFound)) {
@@ -113,6 +120,7 @@ export class Processor {
     for (const [path, content] of Object.entries(changes.files)) {
       const dir = dirname(path);
       await ensureDir(dir);
+      console.log(`Writing ${path}`);
       await Deno.writeTextFile(path, content);
     }
   }
@@ -124,6 +132,7 @@ export class Processor {
     } catch (err) {
       if (err instanceof Deno.errors.NotFound) {
         await this.createVerificationScript();
+        console.log("Created verification stub at " + verifyPath);
       } else {
         throw err;
       }
@@ -134,11 +143,14 @@ export class Processor {
       stdout: "piped",
       stderr: "piped",
     });
+    console.log("Running verification script...");
     const { code, stdout, stderr } = await cmd.output();
     if (code !== 0) {
       const output = stdout.length ? stdout : stderr;
+      console.log("Verification errors:\n" + new TextDecoder().decode(output));
       return new TextDecoder().decode(output);
     }
+    console.log("Verification script exited successfully");
     return undefined;
   }
 
@@ -150,6 +162,7 @@ export class Processor {
       `#!/bin/bash\n# Add your build, test, and lint commands here\n# Examples:\n# deno task build\n# deno test\n\necho \"No verification script configured - skipping checks\"\nexit 0\n`;
     await Deno.writeTextFile(verifyPath, content);
     await Deno.chmod(verifyPath, 0o700);
+    console.log("Wrote verification stub to " + verifyPath);
   }
 
   private async fixWithClaude(
@@ -160,10 +173,12 @@ export class Processor {
     const prompt =
       `The verification script failed with these errors:\n\n${verifyErrors}\n\nHere are the current code changes:\n${changesJSON}\n\nPlease fix the code to resolve these verification errors. Return the corrected implementation.\n\nFormat as JSON with the same structure as before:\n{\n  "files": {...},\n  "new_files": [...],\n  "deleted_files": [...],\n  "summary": "Description of fixes applied"\n}`;
     const claude = await this.getClaude();
+    console.log("Sending fix prompt to Claude...");
     const res = await claude.chat({ prompt });
     if (!res.success || !res.message?.result) {
       throw new Error(res.error?.result ?? "claude failed");
     }
+    console.log("Claude returned fixed changes");
     return JSON.parse(res.message.result);
   }
 }
