@@ -86,8 +86,17 @@ Format as JSON:
 }
 EOF2
 
+
 changes_json=$(claude_chat "$(cat "$prompt_file")")
 rm "$prompt_file"
+
+rand=$(tr -dc 'a-z0-9' </dev/urandom | head -c 6)
+branch="cca/issue-$number-$rand"
+root_dir=$(git rev-parse --show-toplevel)
+work_dir="$root_dir/.cca/worktrees/$branch"
+mkdir -p "$root_dir/.cca/worktrees"
+git worktree add "$work_dir" -b "$branch"
+pushd "$work_dir" >/dev/null
 
 max_retries=3
 attempt=1
@@ -140,14 +149,14 @@ EOF3
   attempt=$((attempt + 1))
 done
 
-rand=$(tr -dc 'a-z0-9' </dev/urandom | head -c 6)
-branch="cca/issue-$number-$rand"
 
-git checkout -b "$branch"
 git add .
 git commit -m "Implement: $title"
 git push origin "$branch"
 
 pr_url=$(gh pr create --draft --title "Fix: $title" --body "Resolves: $ISSUE_URL")
+
+popd >/dev/null
+git worktree remove "$work_dir"
 
 echo "Pull request created: $pr_url"

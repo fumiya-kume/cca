@@ -7,7 +7,7 @@ CCA is a shell-based tool that automates the process of implementing GitHub issu
 - 🤖 **AI-Powered Code Generation**: Uses the Claude API to analyze GitHub issues and generate implementation code
 - 🔄 **Automatic Retry Logic**: If verification fails, Claude will attempt to fix the errors (up to 3 attempts)
 - 🧪 **Built-in Verification**: Runs custom verification scripts to ensure code quality before committing
-- 🌿 **Automated Git Workflow**: Creates branches, commits changes, and opens draft pull requests
+- 🌿 **Automated Git Workflow**: Uses a temporary git worktree to create branches, commit changes, and open draft pull requests
 
 ## Requirements
 
@@ -41,8 +41,10 @@ export ANTHROPIC_API_KEY=your-key
 3. **Applies Changes**: Writes the generated files to your local repository
 4. **Runs Verification**: Executes `.cca/verify.sh` to validate the changes
 5. **Handles Failures**: If verification fails, asks Claude to fix the errors
-6. **Creates Branch**: Commits changes to `cca/issue-<number>` branch
-7. **Opens Pull Request**: Creates a draft PR that links back to the original issue
+6. **Creates Worktree**: Checks out a new worktree in `.cca/worktrees/` for branch `cca/issue-<number>` and commits the changes there
+7. **Opens Pull Request**: Creates a draft PR that links back to the original issue and then removes the temporary worktree
+
+The worktree is created under `.cca/worktrees/` using the issue number and a random suffix. It is automatically cleaned up after the pull request is opened.
 
 ## Verification Script
 
