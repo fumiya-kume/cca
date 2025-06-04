@@ -1,14 +1,21 @@
 import { dirname, join } from "https://deno.land/std@0.204.0/path/mod.ts";
 import { ensureDir } from "https://deno.land/std@0.204.0/fs/mod.ts";
-import { ClaudeCode } from "npm:claude-code-js";
+// Lazy import to avoid issues with Node/Esm interop during testing
+import type { ClaudeCode } from "npm:claude-code-js";
 import { CodeChanges, Issue } from "./types.ts";
 import { helpers } from "./git.ts";
 
 export class Processor {
-  private claude: ClaudeCode;
+  private claude?: ClaudeCode;
 
-  constructor() {
-    this.claude = new ClaudeCode();
+  constructor() {}
+
+  private async getClaude(): Promise<ClaudeCode> {
+    if (!this.claude) {
+      const mod = await import("npm:claude-code-js");
+      this.claude = new mod.ClaudeCode();
+    }
+    return this.claude;
   }
 
   async processIssue(issueURL: string): Promise<void> {
@@ -84,7 +91,8 @@ export class Processor {
   private async generateCode(issue: Issue): Promise<CodeChanges> {
     const prompt =
       `Implement a solution for this GitHub issue:\n\nIssue: ${issue.title}\nDescription: ${issue.body}\nRepository: ${issue.repository}\n\nAnalyze the issue and provide a complete implementation including:\n1. All necessary code changes\n2. Tests for the implementation\n3. Any documentation updates needed\n\nReturn the implementation as file paths and their complete content.\n\nFormat as JSON:\n{\n  "files": {\n    "path/to/file.ts": "complete file content..."\n  },\n  "new_files": ["list", "of", "new", "files"],\n  "deleted_files": ["list", "of", "deleted", "files"],\n  "summary": "Brief description of changes made"\n}`;
-    const res = await this.claude.chat({ prompt });
+    const claude = await this.getClaude();
+    const res = await claude.chat({ prompt });
     if (!res.success || !res.message?.result) {
       throw new Error(res.error?.result ?? "claude failed");
     }
@@ -151,7 +159,8 @@ export class Processor {
     const changesJSON = JSON.stringify(currentChanges, null, 2);
     const prompt =
       `The verification script failed with these errors:\n\n${verifyErrors}\n\nHere are the current code changes:\n${changesJSON}\n\nPlease fix the code to resolve these verification errors. Return the corrected implementation.\n\nFormat as JSON with the same structure as before:\n{\n  "files": {...},\n  "new_files": [...],\n  "deleted_files": [...],\n  "summary": "Description of fixes applied"\n}`;
-    const res = await this.claude.chat({ prompt });
+    const claude = await this.getClaude();
+    const res = await claude.chat({ prompt });
     if (!res.success || !res.message?.result) {
       throw new Error(res.error?.result ?? "claude failed");
     }
