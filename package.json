@@ -1,0 +1,8 @@
+{
+  "name": "cca",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "claude-code-js": "^0.4.0"
+  }
+}

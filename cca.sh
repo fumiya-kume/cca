@@ -1,33 +1,16 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-claude_chat() {
-  local prompt="$1"
-  if [ -z "${ANTHROPIC_API_KEY:-}" ]; then
-    echo "ANTHROPIC_API_KEY not set" >&2
-    return 1
-  fi
+script_dir="$(dirname "$0")"
 
-  curl -sS https://api.anthropic.com/v1/messages \
-    -H "x-api-key: $ANTHROPIC_API_KEY" \
-    -H "anthropic-version: 2023-06-01" \
-    -H "content-type: application/json" \
-    -d "$(jq -n --arg p "$prompt" '{model:"claude-3-opus-20240229",max_tokens:4096,messages:[{role:"user",content:$p}] }')" |
-    jq -r '.content[0].text'
+claude_chat() {
+  local prompt_file="$1"
+  node "$script_dir/scripts/claude_chat.mjs" "$prompt_file"
 }
 
 apply_changes() {
   local file="$1"
-  jq -r '.deleted_files[]?' "$file" | while read -r path; do
-    rm -f "$path" && echo "Deleted $path"
-  done
-
-  jq -r '.files | keys[]' "$file" | while read -r path; do
-    content=$(jq -r --arg p "$path" '.files[$p]' "$file")
-    mkdir -p "$(dirname "$path")"
-    printf '%s' "$content" > "$path"
-    echo "Wrote $path"
-  done
+  node "$script_dir/scripts/apply_changes.mjs" "$file"
 }
 
 if [ "$#" -ne 1 ]; then
@@ -49,8 +32,8 @@ if ! command -v jq >/dev/null; then
   echo "jq command not found" >&2
   exit 1
 fi
-if ! command -v curl >/dev/null; then
-  echo "curl command not found" >&2
+if ! command -v node >/dev/null; then
+  echo "node command not found" >&2
   exit 1
 fi
 
@@ -87,7 +70,7 @@ Format as JSON:
 EOF2
 
 
-changes_json=$(claude_chat "$(cat "$prompt_file")")
+changes_json=$(claude_chat "$prompt_file")
 rm "$prompt_file"
 
 rand=$(tr -dc 'a-z0-9' </dev/urandom | head -c 6)
@@ -144,7 +127,7 @@ Format as JSON with the same structure as before:
   "summary": "..."
 }
 EOF3
-  changes_json=$(claude_chat "$(cat "$fix_prompt_file")")
+  changes_json=$(claude_chat "$fix_prompt_file")
   rm "$fix_prompt_file"
   attempt=$((attempt + 1))
 done
