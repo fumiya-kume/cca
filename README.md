@@ -1,21 +1,21 @@
 # Claude Code Assistant (CCA)
 
-CCA is a command-line tool written in TypeScript for Deno that automates the process of implementing GitHub issue fixes. It leverages Claude AI to generate code changes, applies them locally, runs verification tests, and creates pull requests automatically.
+CCA is a shell-based tool that automates the process of implementing GitHub issue fixes. It leverages Claude AI to generate code changes, applies them locally, runs verification tests, and creates pull requests automatically.
 
 ## Features
 
-- 🤖 **AI-Powered Code Generation**: Uses Claude Code JS SDK to analyze GitHub issues and generate implementation code
+- 🤖 **AI-Powered Code Generation**: Uses the Claude API to analyze GitHub issues and generate implementation code
 - 🔄 **Automatic Retry Logic**: If verification fails, Claude will attempt to fix the errors (up to 3 attempts)
 - 🧪 **Built-in Verification**: Runs custom verification scripts to ensure code quality before committing
 - 🌿 **Automated Git Workflow**: Creates branches, commits changes, and opens draft pull requests
-- 📝 **Full Code Coverage**: Includes comprehensive test suite with mocked dependencies
 
 ## Requirements
 
-- [Deno](https://deno.land/) v1.35+ (install via [installation guide](https://deno.land/#installation))
 - [`gh`](https://cli.github.com/) GitHub CLI authenticated and configured for your repository
 - `git` with push access to the target repository
 - `bash` for running verification scripts
+- `curl` for calling the Claude API
+- `jq` for JSON parsing
 
 ## Installation
 
@@ -28,16 +28,16 @@ cd cca
 
 ## Usage
 
-Run CCA with a GitHub issue URL:
+Run CCA with a GitHub issue URL using the shell script:
 
 ```bash
-deno run -A src/main.ts https://github.com/owner/repo/issues/123
+export ANTHROPIC_API_KEY=your-key
+./cca.sh https://github.com/owner/repo/issues/123
 ```
 
-### What CCA Does
 
 1. **Fetches Issue Details**: Uses `gh issue view` to retrieve the issue information
-2. **Generates Code**: Sends the issue details to Claude Code JS to generate a solution
+2. **Generates Code**: Sends the issue details to the Claude API to generate a solution
 3. **Applies Changes**: Writes the generated files to your local repository
 4. **Runs Verification**: Executes `.cca/verify.sh` to validate the changes
 5. **Handles Failures**: If verification fails, asks Claude to fix the errors
@@ -58,112 +58,10 @@ If the script doesn't exist, CCA creates a stub that always passes:
 ```bash
 #!/bin/bash
 # Add your build, test, and lint commands here
-# Examples:
-# deno task build
-# deno test
 
 echo "No verification script configured - skipping checks"
 exit 0
 ```
-
-### Example Verification Script
-
-```bash
-#!/bin/bash
-set -e
-
-# Run formatter check
-echo "Checking code formatting..."
-deno fmt --check src/
-
-# Run linter
-echo "Running linter..."
-deno lint src/
-
-# Run tests
-echo "Running tests..."
-deno test --allow-all
-
-# Build project (if applicable)
-# echo "Building project..."
-# deno task build
-
-echo "All checks passed!"
-```
-
-## Development
-
-### Project Structure
-
-```
-cca/
-├── src/
-│   ├── main.ts        # Entry point and CLI argument handling
-│   ├── processor.ts   # Core logic for processing issues
-│   ├── git.ts         # Git operations (branch, commit, push, PR)
-│   └── types.ts       # TypeScript interfaces
-├── tests/
-│   └── processor.test.ts # Comprehensive test suite
-└── .github/
-    └── workflows/
-        └── ci.yml     # GitHub Actions CI pipeline
-```
-
-### Running Locally
-
-Format code:
-```bash
-deno fmt src/main.ts src/processor.ts src/types.ts src/git.ts
-```
-
-Lint code:
-```bash
-deno lint src/main.ts src/processor.ts src/types.ts src/git.ts
-```
-
-Run tests:
-```bash
-DENO_TLS_CA_STORE=system deno test --allow-all --coverage=cov
-```
-
-Generate coverage report:
-```bash
-deno coverage cov --lcov > coverage.lcov
-```
-
-### Key Components
-
-#### Processor Class (`src/processor.ts`)
-- Main orchestrator for the issue processing workflow
-- Handles Claude API communication
-- Manages file operations and verification
-- Implements retry logic for failed verifications
-
-#### Git Helpers (`src/git.ts`)
-- Provides git operations: branch creation, committing, pushing
-- Creates pull requests using GitHub CLI
-- Mockable helpers for testing
-
-#### Type Definitions (`src/types.ts`)
-- `Issue`: GitHub issue structure
-- `CodeChanges`: Claude's response format for file modifications
-
-### Testing
-
-The test suite uses Deno's built-in testing framework with mocked external dependencies:
-
-- Mock `Deno.Command` for shell command simulation
-- Mock file system operations
-- Test coverage for error handling and edge cases
-
-## Continuous Integration
-
-The repository includes GitHub Actions workflow that runs on every pull request:
-
-1. Code formatting check
-2. Linting
-3. Full test suite with coverage
-4. Coverage report generation
 
 ## Error Handling
 
