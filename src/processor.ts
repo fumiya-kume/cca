@@ -13,10 +13,10 @@ export class Processor {
 
   private async getClaude(): Promise<ClaudeCode> {
     if (!this.claude) {
-      console.log("\uD83E\uDD16 Loading Claude Code SDK...");
+      console.log("🤖 Loading Claude Code SDK...");
       const mod = await import("npm:claude-code-js");
       this.claude = new mod.ClaudeCode();
-      console.log("\u2705 Claude Code SDK loaded");
+      console.log("✅ Claude Code SDK loaded");
     }
     return this.claude;
   }
@@ -40,28 +40,26 @@ export class Processor {
   }
 
   async processIssue(issueURL: string): Promise<void> {
-    console.log("\uD83D\uDD0D Fetching issue...");
+    console.log("🔍 Fetching issue...");
     const issue = await this.fetchIssue(issueURL);
-    console.log(`\u2705 Issue fetched: "${issue.title}"\n`);
+    console.log(`✅ Issue fetched: "${issue.title}"\n`);
 
-    console.log("\uD83E\uDD16 Generating code with Claude...");
+    console.log("🤖 Generating code with Claude...");
     console.log(`Using issue data: ${JSON.stringify(issue)}`);
     let changes = await this.generateCode(issue);
     console.log(
-      `\u2705 Code generated: ${
-        Object.keys(changes.files).length
-      } files changed\n`,
+      `✅ Code generated: ${Object.keys(changes.files).length} files changed\n`,
     );
 
     const maxRetries = 3;
     for (let attempt = 1; attempt <= maxRetries; attempt++) {
-      console.log(`\uD83D\uDD0C Applying changes (attempt ${attempt})...`);
+      console.log(`🔌 Applying changes (attempt ${attempt})...`);
       await this.applyChanges(changes);
 
-      console.log("\uD83D\uDD27 Running verification (.cca/verify.sh)...");
+      console.log("🔧 Running verification (.cca/verify.sh)...");
       const verifyErr = await this.runVerification();
       if (!verifyErr) {
-        console.log("\u2705 Verification passed");
+        console.log("✅ Verification passed");
         break;
       }
 
@@ -71,26 +69,24 @@ export class Processor {
         );
       }
 
-      console.log(`\u274C Verification failed: ${verifyErr}\n`);
+      console.log(`❌ Verification failed: ${verifyErr}\n`);
       console.log(
-        `\uD83D\uDD04 Verification failed (attempt ${attempt}/${maxRetries}), asking Claude to fix...`,
+        `🔄 Verification failed (attempt ${attempt}/${maxRetries}), asking Claude to fix...`,
       );
-      console.log("\uD83E\uDD16 Claude fixing verification errors...");
+      console.log("🤖 Claude fixing verification errors...");
       changes = await this.fixWithClaude(changes, verifyErr);
       console.log(
-        `\u2705 Code updated: ${
-          Object.keys(changes.files).length
-        } files changed\n`,
+        `✅ Code updated: ${Object.keys(changes.files).length} files changed\n`,
       );
     }
 
-    console.log(`\uD83D\uDCDD Creating branch cca/issue-${issue.number}...`);
+    console.log(`📝 Creating randomized branch for issue ${issue.number}...`);
     await helpers.gitOperations(issue);
-    console.log("\u2705 Changes committed and pushed");
+    console.log("✅ Changes committed and pushed");
 
-    console.log("\uD83C\uDFAF Creating pull request...");
+    console.log("🎯 Creating pull request...");
     const prURL = await helpers.createPR(issue);
-    console.log(`\u2705 Pull request created: ${prURL}\n`);
+    console.log(`✅ Pull request created: ${prURL}\n`);
   }
 
   private async fetchIssue(issueURL: string): Promise<Issue> {
@@ -181,7 +177,7 @@ export class Processor {
     const verifyPath = join(verifyDir, "verify.sh");
     await ensureDir(verifyDir);
     const content =
-      `#!/bin/bash\n# Add your build, test, and lint commands here\n# Examples:\n# deno task build\n# deno test\n\necho \"No verification script configured - skipping checks\"\nexit 0\n`;
+      `#!/bin/bash\n# Add your build, test, and lint commands here\n# Examples:\n# deno task build\n# deno test\n\necho "No verification script configured - skipping checks"\nexit 0\n`;
     await Deno.writeTextFile(verifyPath, content);
     await Deno.chmod(verifyPath, 0o700);
     console.log("Wrote verification stub to " + verifyPath);
