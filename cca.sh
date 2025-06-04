@@ -1,16 +1,32 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-script_dir="$(dirname "$0")"
-
 claude_chat() {
   local prompt_file="$1"
-  node "$script_dir/scripts/claude_chat.mjs" "$prompt_file"
+  local prompt
+  prompt=$(cat "$prompt_file")
+  curl -sS https://api.anthropic.com/v1/messages \
+    -H "x-api-key: $ANTHROPIC_API_KEY" \
+    -H "content-type: application/json" \
+    -H "anthropic-version: 2023-06-01" \
+    -d "$(jq -n --arg prompt "$prompt" '{model:"claude-3-sonnet-20240229",max_tokens:4096,messages:[{role:"user",content:$prompt}]}' )" |
+    jq -r '.content[0].text'
 }
 
 apply_changes() {
   local file="$1"
-  node "$script_dir/scripts/apply_changes.mjs" "$file"
+  jq -r '.deleted_files[]?' "$file" | while read -r path; do
+    rm -f "$path"
+    echo "Deleted $path"
+  done
+
+  jq -r '.files | to_entries[] | [.key, (.value|@base64)] | @tsv' "$file" 2>/dev/null | \
+  while IFS=$'\t' read -r path b64; do
+    content=$(echo "$b64" | base64 --decode)
+    mkdir -p "$(dirname "$path")"
+    printf '%s' "$content" > "$path"
+    echo "Wrote $path"
+  done
 }
 
 if [ "$#" -ne 1 ]; then
@@ -32,8 +48,13 @@ if ! command -v jq >/dev/null; then
   echo "jq command not found" >&2
   exit 1
 fi
-if ! command -v node >/dev/null; then
-  echo "node command not found" >&2
+if ! command -v curl >/dev/null; then
+  echo "curl command not found" >&2
+  exit 1
+fi
+
+if [ -z "${ANTHROPIC_API_KEY:-}" ]; then
+  echo "ANTHROPIC_API_KEY environment variable not set" >&2
   exit 1
 fi
 

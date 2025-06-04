@@ -4,7 +4,7 @@ CCA is a shell-based tool that automates the process of implementing GitHub issu
 
 ## Features
 
-- 🤖 **AI-Powered Code Generation**: Uses the `claude-code-js` library to analyze GitHub issues and generate implementation code
+- 🤖 **AI-Powered Code Generation**: Sends prompts directly to the Claude API to analyze GitHub issues and generate implementation code
 - 🔄 **Automatic Retry Logic**: If verification fails, Claude will attempt to fix the errors (up to 3 attempts)
 - 🧪 **Built-in Verification**: Runs custom verification scripts to ensure code quality before committing
 - 🌿 **Automated Git Workflow**: Uses a temporary git worktree to create branches, commit changes, and open draft pull requests
@@ -14,7 +14,7 @@ CCA is a shell-based tool that automates the process of implementing GitHub issu
 - [`gh`](https://cli.github.com/) GitHub CLI authenticated and configured for your repository
 - `git` with push access to the target repository
 - `bash` for running verification scripts
-- `node` to run Claude helpers
+- `curl` for calling the Claude API
 - `jq` for JSON parsing
 
 ## Installation
@@ -24,7 +24,6 @@ Clone this repository:
 ```bash
 git clone https://github.com/fumiya-kume/cca.git
 cd cca
-npm install
 ```
 
 ## Usage
@@ -38,7 +37,7 @@ export ANTHROPIC_API_KEY=your-key
 
 
 1. **Fetches Issue Details**: Uses `gh issue view` to retrieve the issue information
-2. **Generates Code**: Uses the `claude-code-js` library to produce a solution based on the issue details
+2. **Generates Code**: Calls the Claude API via `curl` to produce a solution based on the issue details
 3. **Applies Changes**: Writes the generated files to your local repository
 4. **Runs Verification**: Executes `.cca/verify.sh` to validate the changes
 5. **Handles Failures**: If verification fails, asks Claude to fix the errors
