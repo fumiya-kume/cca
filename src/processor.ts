@@ -4,6 +4,7 @@ import { ensureDir } from "https://deno.land/std@0.204.0/fs/mod.ts";
 import type { ClaudeCode } from "npm:claude-code-js";
 import { CodeChanges, Issue } from "./types.ts";
 import { helpers } from "./git.ts";
+import { withProgress } from "./progress.ts";
 
 export class Processor {
   private claude?: ClaudeCode;
@@ -115,7 +116,10 @@ export class Processor {
       `Implement a solution for this GitHub issue:\n\nIssue: ${issue.title}\nDescription: ${issue.body}\nRepository: ${issue.repository}\n\nAnalyze the issue and provide a complete implementation including:\n1. All necessary code changes\n2. Tests for the implementation\n3. Any documentation updates needed\n\nReturn the implementation as file paths and their complete content.\n\nFormat as JSON:\n{\n  "files": {\n    "path/to/file.ts": "complete file content..."\n  },\n  "new_files": ["list", "of", "new", "files"],\n  "deleted_files": ["list", "of", "deleted", "files"],\n  "summary": "Brief description of changes made"\n}`;
     console.log("Prompt sent to Claude:\n" + prompt);
     const claude = await this.getClaude();
-    const res = await claude.chat({ prompt });
+    const res = await withProgress(
+      "Waiting for Claude",
+      () => claude.chat({ prompt }),
+    );
     if (!res.success || !res.message?.result) {
       throw new Error(res.error?.result ?? "claude failed");
     }
@@ -192,7 +196,10 @@ export class Processor {
       `The verification script failed with these errors:\n\n${verifyErrors}\n\nHere are the current code changes:\n${changesJSON}\n\nPlease fix the code to resolve these verification errors. Return the corrected implementation.\n\nFormat as JSON with the same structure as before:\n{\n  "files": {...},\n  "new_files": [...],\n  "deleted_files": [...],\n  "summary": "Description of fixes applied"\n}`;
     const claude = await this.getClaude();
     console.log("Sending fix prompt to Claude...");
-    const res = await claude.chat({ prompt });
+    const res = await withProgress(
+      "Waiting for Claude fix",
+      () => claude.chat({ prompt }),
+    );
     if (!res.success || !res.message?.result) {
       throw new Error(res.error?.result ?? "claude failed");
     }
