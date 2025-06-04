@@ -2,6 +2,7 @@ import { dirname, join } from "https://deno.land/std@0.204.0/path/mod.ts";
 import { ensureDir } from "https://deno.land/std@0.204.0/fs/mod.ts";
 import { ClaudeCode } from "npm:claude-code-js";
 import { CodeChanges, Issue } from "./types.ts";
+import { helpers } from "./git.ts";
 
 export class Processor {
   private claude: ClaudeCode;
@@ -54,11 +55,11 @@ export class Processor {
     }
 
     console.log(`\uD83D\uDCDD Creating branch cca/issue-${issue.number}...`);
-    await this.gitOperations(issue);
+    await helpers.gitOperations(issue);
     console.log("\u2705 Changes committed and pushed");
 
     console.log("\uD83C\uDFAF Creating pull request...");
-    const prURL = await this.createPR(issue);
+    const prURL = await helpers.createPR(issue);
     console.log(`\u2705 Pull request created: ${prURL}\n`);
   }
 
@@ -155,53 +156,5 @@ export class Processor {
       throw new Error(res.error?.result ?? "claude failed");
     }
     return JSON.parse(res.message.result);
-  }
-
-  private async gitOperations(issue: Issue): Promise<void> {
-    const branchName = `cca/issue-${issue.number}`;
-
-    let status = await new Deno.Command("git", {
-      args: ["checkout", "-b", branchName],
-    }).spawn().status;
-    if (status.code !== 0) throw new Error("failed to create branch");
-
-    status = await new Deno.Command("git", { args: ["add", "."] }).spawn()
-      .status;
-    if (status.code !== 0) throw new Error("failed to add files");
-
-    const commitMsg = `Implement: ${issue.title}`;
-    status = await new Deno.Command("git", {
-      args: ["commit", "-m", commitMsg],
-    }).spawn().status;
-    if (status.code !== 0) throw new Error("failed to commit");
-
-    status = await new Deno.Command("git", {
-      args: ["push", "origin", branchName],
-    }).spawn().status;
-    if (status.code !== 0) throw new Error("failed to push");
-  }
-
-  private async createPR(issue: Issue): Promise<string> {
-    const title = `Fix: ${issue.title}`;
-    const body = `Resolves: ${issue.url}`;
-
-    const cmd = new Deno.Command("gh", {
-      args: ["pr", "create", "--draft", "--title", title, "--body", body],
-      stdout: "piped",
-      stderr: "piped",
-    });
-
-    const { code, stdout, stderr } = await cmd.output();
-    const output = new TextDecoder().decode(stdout.length ? stdout : stderr);
-    if (code !== 0) {
-      throw new Error(`failed to create PR: ${output}`);
-    }
-
-    const lines = output.trim().split("\n");
-    const lastLine = lines[lines.length - 1];
-    if (lastLine.includes("github.com")) {
-      return lastLine;
-    }
-    return output.trim();
   }
 }
