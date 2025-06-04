@@ -48,9 +48,7 @@ export class Processor {
     console.log(`Using issue data: ${JSON.stringify(issue)}`);
     let changes = await this.generateCode(issue);
     console.log(
-      `✅ Code generated: ${
-        Object.keys(changes.files).length
-      } files changed\n`,
+      `✅ Code generated: ${Object.keys(changes.files).length} files changed\n`,
     );
 
     const maxRetries = 3;
@@ -78,9 +76,7 @@ export class Processor {
       console.log("🤖 Claude fixing verification errors...");
       changes = await this.fixWithClaude(changes, verifyErr);
       console.log(
-        `✅ Code updated: ${
-          Object.keys(changes.files).length
-        } files changed\n`,
+        `✅ Code updated: ${Object.keys(changes.files).length} files changed\n`,
       );
     }
 
