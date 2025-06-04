@@ -53,11 +53,6 @@ if ! command -v claude >/dev/null; then
   exit 1
 fi
 
-if [ -z "${ANTHROPIC_API_KEY:-}" ]; then
-  echo "ANTHROPIC_API_KEY environment variable not set" >&2
-  exit 1
-fi
-
 # fetch issue details
 echo "Fetching issue..."
 issue_json=$(gh issue view "$ISSUE_URL" --json number,title,body,url)
