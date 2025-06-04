@@ -1,11 +1,15 @@
 # Claude Code Assistant (CCA)
 
-CCA is a command line tool written in TypeScript for Deno. It fetches a GitHub issue, asks Claude to generate the required code changes, runs a verification script, and then commits and pushes a new branch with a draft pull request.
+CCA is a command line tool written in TypeScript for Deno. It fetches a GitHub
+issue, asks Claude to generate the required code changes, runs a verification
+script, and then commits and pushes a new branch with a draft pull request.
 
 ## Requirements
 
-- [Deno](https://deno.land/) v1.35+ (the install script or package manager can be used)
-- [`gh`](https://cli.github.com/) GitHub CLI configured for the target repository
+- [Deno](https://deno.land/) v1.35+ (the install script or package manager can
+  be used)
+- [`gh`](https://cli.github.com/) GitHub CLI configured for the target
+  repository
 - `git` with push access
 
 ## Usage
@@ -27,7 +31,9 @@ CCA will:
 
 ## Verification Script
 
-Place your build/test commands in `.cca/verify.sh`. The script should exit with a non-zero status on failure. If the file is missing, CCA writes a stub that simply succeeds.
+Place your build/test commands in `.cca/verify.sh`. The script should exit with
+a non-zero status on failure. If the file is missing, CCA writes a stub that
+simply succeeds.
 
 ## Development
 
@@ -43,3 +49,7 @@ Lint with:
 deno lint src/main.ts src/processor.ts src/types.ts
 ```
 
+## Continuous Integration
+
+The repository includes a GitHub Actions workflow that runs formatting, linting,
+and the test suite for every pull request.
