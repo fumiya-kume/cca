@@ -1,7 +1,22 @@
 import { Issue } from "./types.ts";
 
+/**
+ * Generate a random string of specified length
+ * @param length The length of the random string
+ * @returns A random alphanumeric string
+ */
+export function generateRandomString(length: number): string {
+  const chars = 'abcdefghijklmnopqrstuvwxyz0123456789';
+  let result = '';
+  for (let i = 0; i < length; i++) {
+    result += chars.charAt(Math.floor(Math.random() * chars.length));
+  }
+  return result;
+}
+
 export async function gitOperations(issue: Issue): Promise<void> {
-  const branchName = `cca/issue-${issue.number}`;
+  const randomSuffix = generateRandomString(6);
+  const branchName = `cca/issue-${issue.number}-${randomSuffix}`;
 
   console.log(`git checkout -b ${branchName}`);
   let status = await new Deno.Command("git", {
@@ -14,7 +29,7 @@ export async function gitOperations(issue: Issue): Promise<void> {
   if (status.code !== 0) throw new Error("failed to add files");
 
   const commitMsg = `Implement: ${issue.title}`;
-  console.log(`git commit -m \"${commitMsg}\"`);
+  console.log(`git commit -m "${commitMsg}"`);
   status = await new Deno.Command("git", { args: ["commit", "-m", commitMsg] })
     .spawn().status;
   if (status.code !== 0) throw new Error("failed to commit");
