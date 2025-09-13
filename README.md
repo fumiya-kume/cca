@@ -8,6 +8,7 @@ CCA is a shell-based tool that automates the process of implementing GitHub issu
 - 🔄 **Automatic Retry Logic**: If verification fails, Claude will attempt to fix the errors (up to 3 attempts)
 - 🧪 **Built-in Verification**: Runs custom verification scripts to ensure code quality before committing
 - 🌿 **Automated Git Workflow**: Uses a temporary git worktree to create branches, commit changes, and open draft pull requests
+- 📝 **Verbose Terminal Logging**: Prints detailed step-by-step logs with timestamps for easier debugging
 
 ## Requirements
 
@@ -114,9 +115,9 @@ See the LICENSE file for details.
 - Ensure the script exits with proper status codes
 - Review Claude's generated code for syntax errors
 
-### Debug Mode
+### Verbose Terminal Logging
 
-For verbose output during processing, check the console output which includes:
+CCA prints detailed logs to the terminal during processing, including:
 - Issue fetching status
 - Claude prompt and response indicators
 - File operation logs
