@@ -8,14 +8,15 @@ CCA is a shell-based tool that automates the process of implementing GitHub issu
 - 🔄 **Automatic Retry Logic**: If verification fails, Claude will attempt to fix the errors (up to 3 attempts)
 - 🧪 **Built-in Verification**: Runs custom verification scripts to ensure code quality before committing
 - 🌿 **Automated Git Workflow**: Uses a temporary git worktree to create branches, commit changes, and open draft pull requests
+- 📝 **Verbose Terminal Logging**: Prints detailed step-by-step logs with timestamps for easier debugging
 
 ## Requirements
 
 - [`gh`](https://cli.github.com/) GitHub CLI authenticated and configured for your repository
 - `git` with push access to the target repository
 - `bash` for running verification scripts
-- `curl` for calling the Claude API
 - `jq` for JSON parsing
+- [`claude`](https://github.com/anthropic/anthropic-cli) CLI for interacting with the Claude API
 
 ## Installation
 
@@ -37,7 +38,7 @@ export ANTHROPIC_API_KEY=your-key
 
 
 1. **Fetches Issue Details**: Uses `gh issue view` to retrieve the issue information
-2. **Generates Code**: Calls the Claude API via `curl` to produce a solution based on the issue details
+2. **Generates Code**: Uses the `claude` CLI to request a solution from the Claude API based on the issue details
 3. **Applies Changes**: Writes the generated files to your local repository
 4. **Runs Verification**: Executes `.cca/verify.sh` to validate the changes
 5. **Handles Failures**: If verification fails, asks Claude to fix the errors
@@ -114,9 +115,9 @@ See the LICENSE file for details.
 - Ensure the script exits with proper status codes
 - Review Claude's generated code for syntax errors
 
-### Debug Mode
+### Verbose Terminal Logging
 
-For verbose output during processing, check the console output which includes:
+CCA prints detailed logs to the terminal during processing, including:
 - Issue fetching status
 - Claude prompt and response indicators
 - File operation logs
